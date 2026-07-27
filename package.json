@@ -6,9 +6,11 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "setup": "npm ci && npm --prefix ui ci --no-audit --no-fund",
     "dev": "tsx src/index.ts",
     "build": "tsc && npm run build:ui",
-    "build:ui": "npm --prefix ui install --no-audit --no-fund && npm --prefix ui run build",
+    "build:ui": "npm --prefix ui ci --no-audit --no-fund || npm --prefix ui install --no-audit --no-fund",
+    "postbuild:ui": "npm --prefix ui run build",
     "restart": "scripts/restart-daemon.sh",
     "deploy": "npm run build && scripts/restart-daemon.sh",
     "dev:ui": "npm --prefix ui run dev",
@@ -29,8 +31,10 @@
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },
-  "allowScripts": {
-    "better-sqlite3@11.10.0": true,
-    "esbuild@0.28.1": true
+  "lavamoat": {
+    "allowScripts": {
+      "better-sqlite3@11.10.0": true,
+      "esbuild@0.28.1": true
+    }
   }
 }

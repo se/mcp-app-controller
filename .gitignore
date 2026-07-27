@@ -10,5 +10,3 @@ public/
 # Misc
 *.log
 .DS_Store
-
-*lock.json
