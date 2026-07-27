@@ -147,7 +147,7 @@ export function AppCard({
             {app.processes.map((p) => (
               <Tooltip key={p.name}>
                 <TooltipTrigger asChild>
-                  <span className="cursor-default">
+                  <span className="inline-flex cursor-default">
                     <StatusDot status={p.status} health={p.health} />
                   </span>
                 </TooltipTrigger>
