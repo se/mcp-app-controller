@@ -12,16 +12,18 @@ import {
 import { appActionWithTakeover, type AppInfo } from '@/lib/api'
 import { useTheme } from '@/lib/theme'
 import type { View } from '@/components/sidebar'
-import { History, LayoutDashboard, Monitor, Moon, Play, RotateCw, Square, Sun } from 'lucide-react'
+import { FileText, History, LayoutDashboard, Monitor, Moon, Play, RotateCw, Square, Sun, Wrench } from 'lucide-react'
 
 export function CommandPalette({
   apps,
   onNavigate,
   onRefresh,
+  onLogs,
 }: {
   apps: AppInfo[]
   onNavigate: (v: View) => void
   onRefresh: () => void
+  onLogs: (app: string, proc: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const { setTheme } = useTheme()
@@ -65,23 +67,60 @@ export function CommandPalette({
             </CommandItem>
           ))}
         </CommandGroup>
-        <CommandSeparator />
-        <CommandGroup heading="Actions">
-          {apps.flatMap((a) => [
-            <CommandItem key={`restart-${a.name}`}
+        {apps.map((a) => (
+          <CommandGroup key={`grp-${a.name}`} heading={a.name}>
+            <CommandItem value={`restart ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { reason: 'restart from command palette' }))}>
-              <RotateCw className="size-4" /> Restart {a.name}
-            </CommandItem>,
-            <CommandItem key={`start-${a.name}`}
+              <RotateCw className="size-4" /> Restart {a.name} (all)
+            </CommandItem>
+            <CommandItem value={`start ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { mode: 'start', reason: 'start from command palette' }))}>
-              <Play className="size-4" /> Start {a.name}
-            </CommandItem>,
-            <CommandItem key={`stop-${a.name}`}
+              <Play className="size-4" /> Start {a.name} (all)
+            </CommandItem>
+            <CommandItem value={`stop ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'stop', { reason: 'stop from command palette' }))}>
-              <Square className="size-4" /> Stop {a.name}
-            </CommandItem>,
-          ])}
-        </CommandGroup>
+              <Square className="size-4" /> Stop {a.name} (all)
+            </CommandItem>
+            {a.processes.flatMap((p) => {
+              const key = `${a.name}/${p.name}`
+              const items = []
+              if (p.status === 'running') {
+                items.push(
+                  <CommandItem key={`restart-${key}`} value={`restart ${key}`}
+                    onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { process: p.name, reason: 'restart from command palette' }))}>
+                    <RotateCw className="size-4" /> Restart {key}
+                  </CommandItem>,
+                  <CommandItem key={`stop-${key}`} value={`stop ${key}`}
+                    onSelect={() => run(() => appActionWithTakeover(a.name, 'stop', { process: p.name, reason: 'stop from command palette' }))}>
+                    <Square className="size-4" /> Stop {key}
+                  </CommandItem>
+                )
+              } else {
+                items.push(
+                  <CommandItem key={`start-${key}`} value={`start ${key}`}
+                    onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { process: p.name, mode: 'start', reason: 'start from command palette' }))}>
+                    <Play className="size-4" /> Start {key}
+                  </CommandItem>
+                )
+                if (p.devCommand) {
+                  items.push(
+                    <CommandItem key={`dev-${key}`} value={`dev start ${key}`}
+                      onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { process: p.name, mode: 'dev', reason: 'dev start from command palette' }))}>
+                      <Wrench className="size-4" /> Start {key} (dev)
+                    </CommandItem>
+                  )
+                }
+              }
+              items.push(
+                <CommandItem key={`logs-${key}`} value={`logs ${key}`}
+                  onSelect={() => run(() => onLogs(a.name, p.name))}>
+                  <FileText className="size-4" /> Logs {key}
+                </CommandItem>
+              )
+              return items
+            })}
+          </CommandGroup>
+        ))}
         <CommandSeparator />
         <CommandGroup heading="Theme">
           <CommandItem onSelect={() => run(() => setTheme('light'))}><Sun className="size-4" /> Light theme</CommandItem>

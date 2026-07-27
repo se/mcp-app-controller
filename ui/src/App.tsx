@@ -184,7 +184,12 @@ function Dashboard() {
         <LogDock ref={dockRef} />
       </div>
 
-      <CommandPalette apps={apps} onNavigate={setView} onRefresh={refresh} />
+      <CommandPalette
+        apps={apps}
+        onNavigate={setView}
+        onRefresh={refresh}
+        onLogs={(app, proc) => dockRef.current?.open(app, proc)}
+      />
       <AppFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
