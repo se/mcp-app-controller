@@ -132,6 +132,20 @@ export const clearAudit = (olderThanDays?: number) =>
 export const saveApp = (def: AppDefInput) => api('/apps', { method: 'POST', body: JSON.stringify(def) })
 export const deleteApp = (app: string) => api(`/apps/${encodeURIComponent(app)}`, { method: 'DELETE' })
 
+// Small persisted UI preference lists (pinned apps, collapsed cards)
+export function loadPref(key: string): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) ?? '[]')
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
+  }
+}
+
+export function savePref(key: string, value: string[]): void {
+  localStorage.setItem(key, JSON.stringify(value))
+}
+
 export function fmtAgo(ts: number): string {
   const s = Math.round((Date.now() - ts) / 1000)
   if (s < 60) return `${s}s ago`

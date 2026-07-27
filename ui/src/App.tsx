@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { getAudit, getState, type AppInfo, type AuditEntry } from '@/lib/api'
+import { getAudit, getState, loadPref, savePref, type AppInfo, type AuditEntry } from '@/lib/api'
 import { logBus, stateBus } from '@/lib/log-bus'
 import { ThemeProvider } from '@/lib/theme'
 import { AppCard } from '@/components/app-card'
@@ -20,7 +20,29 @@ function Dashboard() {
   const [formOpen, setFormOpen] = useState(false)
   const [editApp, setEditApp] = useState<AppInfo | null>(null)
   const [view, setView] = useState<View>('overview')
+  const [pinned, setPinned] = useState<string[]>(() => loadPref('appctrl-pinned'))
+  const [collapsed, setCollapsed] = useState<string[]>(() => loadPref('appctrl-collapsed'))
   const dockRef = useRef<LogDockHandle>(null)
+
+  const togglePin = (name: string) =>
+    setPinned((prev) => {
+      const next = prev.includes(name) ? prev.filter((x) => x !== name) : [name, ...prev]
+      savePref('appctrl-pinned', next)
+      return next
+    })
+
+  const toggleCollapse = (name: string) =>
+    setCollapsed((prev) => {
+      const next = prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+      savePref('appctrl-collapsed', next)
+      return next
+    })
+
+  // Pinned apps first (in pin order), the rest in config order
+  const sortedApps = useMemo(() => {
+    const pinnedApps = pinned.map((n) => apps.find((a) => a.name === n)).filter(Boolean) as AppInfo[]
+    return [...pinnedApps, ...apps.filter((a) => !pinned.includes(a.name))]
+  }, [apps, pinned])
 
   const refresh = useCallback(() => {
     getState().then((s) => { setApps(s.apps); stateBus.emit(s.apps) }).catch(() => {})
@@ -68,7 +90,7 @@ function Dashboard() {
   return (
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar
-        apps={apps}
+        apps={sortedApps}
         view={view}
         onNavigate={setView}
         onNewApp={() => { setEditApp(null); setFormOpen(true) }}
@@ -113,10 +135,14 @@ function Dashboard() {
                       No apps defined yet. Click <span className="font-medium text-foreground">New App</span> to add one.
                     </div>
                   ) : (
-                    apps.map((app) => (
+                    sortedApps.map((app) => (
                       <div key={app.name} id={`app-${app.name}`}>
                         <AppCard
                           app={app}
+                          pinned={pinned.includes(app.name)}
+                          collapsed={collapsed.includes(app.name)}
+                          onTogglePin={() => togglePin(app.name)}
+                          onToggleCollapse={() => toggleCollapse(app.name)}
                           onLogs={(proc) => dockRef.current?.open(app.name, proc)}
                           onEdit={() => { setEditApp(app); setFormOpen(true) }}
                           onChanged={refresh}
