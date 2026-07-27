@@ -119,15 +119,19 @@ Recommended addition to your global `~/.claude/CLAUDE.md` so sessions actually u
 
 > Never start/stop/restart apps directly from the shell. Always use the `app-controller`
 > MCP tools (`list_apps`, `start_app`, `restart_app`, `app_logs`, `wait_for_log`, ...).
+> At the start of your work, call `identify` with a short stable name describing your task
+> (e.g. "checkout-fix") — your leases then survive daemon restarts and reconnects.
 > When working on an app for a while, claim it first with `claim_app` and release it with
 > `release_app` when done. If you get a CONFLICT response, stop and consider the other
-> session's work — only use `force=true` when you are certain.
+> session's work — only use `force=true` when you are certain (unless the conflict names
+> your own identity after a reconnect: re-identify and retry).
 
 ## MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `list_apps` | All apps, process statuses, pids, modes, active leases |
+| `identify` | Set a stable session name so leases survive restarts/reconnects |
+| `list_apps` | All apps, process statuses, pids, modes, cpu/mem, active leases |
 | `start_app` / `stop_app` / `restart_app` | Manage an app or a single process (`mode: start\|dev`, requires `reason`) |
 | `app_logs` | Last N log lines (stdout+stderr, timestamped) |
 | `wait_for_log` | Block until a log line matches a regex (readiness / next error), with timeout + lookback |

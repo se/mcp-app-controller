@@ -84,7 +84,8 @@ export class Controller {
       message:
         `CONFLICT: app '${appName}' is currently held by session '${lease.session}' ` +
         `(reason: "${lease.reason}", acquired ${ago}s ago, lease expires in ${left}s). ` +
-        `Another session is actively working on this app. If you are sure your action will not disrupt it, retry with force=true.`,
+        `Another session is actively working on this app. If you are sure your action will not disrupt it, retry with force=true. ` +
+        `(If '${lease.session}' is actually YOU — e.g. after a daemon restart or reconnect — call identify with that name and retry.)`,
     };
   }
 

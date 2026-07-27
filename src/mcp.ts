@@ -36,6 +36,25 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
   const server = new McpServer({ name: 'app-controller', version: '0.1.0' });
 
   server.registerTool(
+    'identify',
+    {
+      title: 'Identify session',
+      description:
+        'Set a STABLE name for this session (e.g. "webapp-refactor"). Call this once at the start of your work. ' +
+        'Leases, claims and audit entries are recorded under this name instead of a random connection id — so your ownership survives daemon restarts and reconnections. ' +
+        'If you ever get a CONFLICT naming an identity that is actually you (after a reconnect), call identify with that name again and retry.',
+      inputSchema: {
+        name: z.string().min(2).max(40).regex(/^[a-zA-Z0-9._-]+$/, 'use letters, digits, dot, dash, underscore').describe('Short stable name for this agent/task, e.g. "checkout-fix"'),
+      },
+    },
+    async ({ name }) => {
+      const prev = actor.session;
+      actor.session = name;
+      return text(`Session identified as '${name}' (was '${prev}'). Leases and audit entries now use this identity; it survives reconnects as long as you re-identify with the same name.`);
+    }
+  );
+
+  server.registerTool(
     'list_apps',
     {
       title: 'List apps',

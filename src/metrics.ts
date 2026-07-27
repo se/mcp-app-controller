@@ -34,6 +34,25 @@ export class MetricsMonitor {
     return this.history.get(`${app}/${proc}`) ?? [];
   }
 
+  /** Serialize history for persistence across daemon restarts. */
+  serialize(): string {
+    return JSON.stringify(Object.fromEntries(this.history));
+  }
+
+  hydrate(json: string | null): void {
+    if (!json) return;
+    try {
+      const data = JSON.parse(json) as Record<string, ProcMetrics[]>;
+      const cutoff = Date.now() - 30 * 60_000; // ignore stale history
+      for (const [key, h] of Object.entries(data)) {
+        const recent = h.filter((m) => m.at > cutoff);
+        if (recent.length > 0) this.history.set(key, recent.slice(-HISTORY_LIMIT));
+      }
+    } catch {
+      // best effort
+    }
+  }
+
   private async tick(): Promise<void> {
     const roots: { key: string; pid: number }[] = [];
     for (const app of this.config.apps) {

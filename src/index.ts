@@ -26,7 +26,9 @@ controller.health = health;
 health.start();
 const metrics = new MetricsMonitor(config, pm);
 controller.metrics = metrics;
+metrics.hydrate(store.getKv('metrics_history'));
 metrics.start();
+setInterval(() => store.setKv('metrics_history', metrics.serialize()), 60_000);
 
 // Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
 // independent of the user's registered default shell.
@@ -58,6 +60,7 @@ async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[controller] ${signal} received — stopping managed processes...`);
+  store.setKv('metrics_history', metrics.serialize());
   store.audit({
     session: 'system', source: 'system', action: 'daemon-shutdown', app: '*', detail: signal, result: 'ok',
   });

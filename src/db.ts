@@ -48,6 +48,10 @@ export class Store {
         acquired_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS kv (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS restore_state (
         app TEXT NOT NULL,
         proc TEXT NOT NULL,
@@ -121,6 +125,17 @@ export class Store {
       .run(lease);
     bus.emit('state');
     return lease;
+  }
+
+  setKv(key: string, value: string): void {
+    this.db
+      .prepare(`INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(key, value);
+  }
+
+  getKv(key: string): string | null {
+    const row = this.db.prepare(`SELECT value FROM kv WHERE key = ?`).get(key) as { value: string } | undefined;
+    return row?.value ?? null;
   }
 
   /** Desired-state tracking: which processes should be running (for boot restore). */
