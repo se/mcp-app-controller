@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -43,6 +44,7 @@ export function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen} title="Command palette" description="Search apps and actions">
+      <Command>
       <CommandInput placeholder="Search apps and actions…" />
       <CommandList>
         <CommandEmpty>No results.</CommandEmpty>
@@ -87,6 +89,7 @@ export function CommandPalette({
           <CommandItem onSelect={() => run(() => setTheme('system'))}><Monitor className="size-4" /> System theme</CommandItem>
         </CommandGroup>
       </CommandList>
+      </Command>
     </CommandDialog>
   )
 }
