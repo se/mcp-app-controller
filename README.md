@@ -75,6 +75,8 @@ Managed processes live inside the daemon — if the daemon stops, it gracefully 
 ```bash
 scripts/install-launchd.sh     # installs + starts a LaunchAgent (auto-start on login, kept alive)
 scripts/uninstall-launchd.sh   # removes it
+npm run deploy                 # rebuild + restart the service (apps auto-restore)
+npm run restart                # restart the service without rebuilding
 ```
 
 The agent launches the daemon through your **login shell** so managed apps inherit your full

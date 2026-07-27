@@ -9,6 +9,8 @@
     "dev": "tsx src/index.ts",
     "build": "tsc && npm --prefix ui run build",
     "build:ui": "npm --prefix ui run build",
+    "restart": "scripts/restart-daemon.sh",
+    "deploy": "npm run build && scripts/restart-daemon.sh",
     "dev:ui": "npm --prefix ui run dev",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
