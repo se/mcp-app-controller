@@ -7,6 +7,7 @@ import { ThemeProvider } from '@/lib/theme'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppCard } from '@/components/app-card'
 import { AppView } from '@/components/app-view'
+import { CommandPalette } from '@/components/command-palette'
 import { ActivityPage } from '@/components/activity-page'
 import { LogDock, type LogDockHandle } from '@/components/log-dock'
 import { AppFormDialog } from '@/components/app-form-dialog'
@@ -17,6 +18,7 @@ import { Plus } from 'lucide-react'
 
 function Dashboard() {
   const [apps, setApps] = useState<AppInfo[]>([])
+  const [profiles, setProfiles] = useState<Record<string, string[]>>({})
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [connected, setConnected] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
@@ -47,7 +49,7 @@ function Dashboard() {
   }, [apps, pinned])
 
   const refresh = useCallback(() => {
-    getState().then((s) => { setApps(s.apps); stateBus.emit(s.apps) }).catch(() => {})
+    getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }).catch(() => {})
     getAudit().then(setAudit).catch(() => {})
   }, [])
 
@@ -68,7 +70,7 @@ function Dashboard() {
       }
       es.onmessage = (ev) => {
         const { type, data } = JSON.parse(ev.data)
-        if (type === 'state') getState().then((s) => { setApps(s.apps); stateBus.emit(s.apps) }).catch(() => {})
+        if (type === 'state') getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }).catch(() => {})
         if (type === 'audit') getAudit().then(setAudit).catch(() => {})
         if (type === 'log') logBus.emit(data)
         if (type === 'metrics') {
@@ -97,6 +99,7 @@ function Dashboard() {
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar
         apps={sortedApps}
+        profiles={profiles}
         view={view}
         onNavigate={setView}
         onNewApp={() => { setEditApp(null); setFormOpen(true) }}
@@ -181,6 +184,7 @@ function Dashboard() {
         <LogDock ref={dockRef} />
       </div>
 
+      <CommandPalette apps={apps} onNavigate={setView} onRefresh={refresh} />
       <AppFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}

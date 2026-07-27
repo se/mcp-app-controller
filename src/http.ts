@@ -119,6 +119,24 @@ export function createHttpServer(controller: Controller) {
     res.json(r);
   });
 
+  api.post('/profiles/:name/:action(start|stop)', async (req, res) => {
+    try {
+      const targets = controller.resolveProfile(req.params.name);
+      const results = [];
+      const list = req.params.action === 'stop' ? [...targets].reverse() : targets;
+      for (const t of list) {
+        const r =
+          req.params.action === 'start'
+            ? await controller.start(t.app, t.proc, 'start', `profile '${req.params.name}' start from UI`, UI_ACTOR, true)
+            : await controller.stop(t.app, t.proc, `profile '${req.params.name}' stop from UI`, UI_ACTOR, true);
+        results.push({ target: t, result: r });
+      }
+      res.json(results);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   api.post('/apps/:app/release-lease', (req, res) => {
     const ok = controller.store.releaseLease(req.params.app);
     if (ok) {

@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
-import type { AppInfo } from '@/lib/api'
+import { profileAction, type AppInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { History, LayoutDashboard, Plus, Settings2 } from 'lucide-react'
+import { History, LayoutDashboard, Layers, Play, Plus, Settings2, Square } from 'lucide-react'
 
 export type View = 'overview' | 'activity' | `app:${string}`
 
@@ -15,12 +15,14 @@ function appDotClass(app: AppInfo): string {
 
 export function Sidebar({
   apps,
+  profiles,
   view,
   onNavigate,
   onNewApp,
   onSelectApp,
 }: {
   apps: AppInfo[]
+  profiles: Record<string, string[]>
   view: View
   onNavigate: (v: View) => void
   onNewApp: () => void
@@ -88,6 +90,39 @@ export function Sidebar({
             </button>
           )
         })}
+        {Object.keys(profiles).length > 0 && (
+          <>
+            <div className="px-2 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Profiles
+            </div>
+            {Object.entries(profiles).map(([name, targets]) => (
+              <div
+                key={name}
+                className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground"
+                title={targets.join(', ')}
+              >
+                <Layers className="size-4 shrink-0" />
+                <span className="truncate">{name}</span>
+                <span className="ml-auto flex gap-0.5 opacity-60 group-hover:opacity-100">
+                  <button
+                    className="rounded p-0.5 hover:bg-accent hover:text-emerald-500"
+                    title={`Start profile '${name}'`}
+                    onClick={() => void profileAction(name, 'start')}
+                  >
+                    <Play className="size-3.5" />
+                  </button>
+                  <button
+                    className="rounded p-0.5 hover:bg-accent hover:text-red-500"
+                    title={`Stop profile '${name}'`}
+                    onClick={() => void profileAction(name, 'stop')}
+                  >
+                    <Square className="size-3.5" />
+                  </button>
+                </span>
+              </div>
+            ))}
+          </>
+        )}
       </nav>
 
       <div className="border-t p-3">

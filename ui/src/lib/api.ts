@@ -15,6 +15,7 @@ export interface ProcInfo {
   healthPort: number | null
   ownLogTimestamps: boolean
   ports: number[]
+  dependsOn: string[]
   health: 'healthy' | 'unhealthy' | 'unknown' | null
   metrics: ProcMetrics | null
   status: 'running' | 'stopped' | 'crashed'
@@ -67,6 +68,7 @@ export interface AppDefInput {
     healthPort?: number
     ownLogTimestamps?: boolean
     ports?: number[]
+    dependsOn?: string[]
   }[]
 }
 
@@ -82,7 +84,10 @@ export async function api<T = unknown>(path: string, opts?: RequestInit): Promis
   return res.json() as Promise<T>
 }
 
-export const getState = () => api<{ apps: AppInfo[] }>('/state')
+export const getState = () => api<{ apps: AppInfo[]; profiles: Record<string, string[]> }>('/state')
+
+export const profileAction = (name: string, action: 'start' | 'stop') =>
+  api(`/profiles/${encodeURIComponent(name)}/${action}`, { method: 'POST', body: '{}' })
 export const getAudit = (limit = 60) => api<AuditEntry[]>(`/audit?limit=${limit}`)
 export const getMetricsHistory = (app: string, proc: string) =>
   api<ProcMetrics[]>(`/apps/${encodeURIComponent(app)}/metrics/${encodeURIComponent(proc)}`)

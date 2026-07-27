@@ -128,3 +128,10 @@
     @apply font-sans;
     }
 }
+::highlight(log-match) {
+    background-color: rgb(250 204 21 / 0.35);
+}
+::highlight(log-match-current) {
+    background-color: rgb(250 204 21);
+    color: black;
+}

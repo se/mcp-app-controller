@@ -8,7 +8,9 @@ import { Button } from '@/components/ui/button'
 import { appActionWithTakeover, getLogs, getState, type ProcInfo } from '@/lib/api'
 import { logBus, stateBus } from '@/lib/log-bus'
 import { cn } from '@/lib/utils'
-import { Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
+import { ChevronDown, ChevronUp, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // Controller-added prefix: "[2026-07-25T17:41:20.052Z] "
 const TS_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T[0-9:.]+Z\]\s?/
@@ -44,6 +46,10 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
   const [hideTs, setHideTs] = useState(false)
   const [procInfo, setProcInfo] = useState<ProcInfo | null>(null)
   const [busy, setBusy] = useState(false)
+  const [filterMode, setFilterMode] = useState(true)
+  const [matchIdx, setMatchIdx] = useState(0)
+  const [matchCount, setMatchCount] = useState(0)
+  const rangesRef = useRef<Range[]>([])
   const bodyRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(follow)
   followRef.current = follow
@@ -117,7 +123,7 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
   }, [mode, query])
 
   const visible = useMemo(() => {
-    if (!query) return lines
+    if (!query || !filterMode) return lines
     if (mode === 'regex') {
       if (!regex?.re) return lines // invalid regex: show all, error shown in toolbar
       return lines.filter((l) => regex.re!.test(stripAnsi(l)))
@@ -127,7 +133,7 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
       const text = stripAnsi(l).toLowerCase()
       return mode === 'fuzzy' ? terms.every((t) => fuzzyTerm(t, text)) : terms.every((t) => text.includes(t))
     })
-  }, [lines, query, mode, regex])
+  }, [lines, query, mode, regex, filterMode])
 
   // Fresh AnsiUp per conversion: it is stateful across calls (open-color carry-over),
   // so converting the whole visible block at once keeps multi-line colors correct.
@@ -143,6 +149,65 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight
     }
   }, [visible])
+
+  // Highlight matches in-place (CSS Custom Highlight API) for text/regex modes
+  useEffect(() => {
+    const registry = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights
+    const HL = (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+    if (!registry || !HL) return
+    registry.delete('log-match')
+    registry.delete('log-match-current')
+    rangesRef.current = []
+    setMatchCount(0)
+    if (!query || mode === 'fuzzy' || !bodyRef.current) return
+    let re: RegExp
+    try {
+      re =
+        mode === 'regex'
+          ? new RegExp(query, 'gi')
+          : new RegExp(query.split(/\s+/).map(escapeRe).join('|'), 'gi')
+    } catch {
+      return
+    }
+    const walker = document.createTreeWalker(bodyRef.current, NodeFilter.SHOW_TEXT)
+    const ranges: Range[] = []
+    let node: Node | null
+    outer: while ((node = walker.nextNode())) {
+      const textContent = node.textContent ?? ''
+      re.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = re.exec(textContent))) {
+        if (m[0].length === 0) { re.lastIndex++; continue }
+        const r = new Range()
+        r.setStart(node, m.index)
+        r.setEnd(node, m.index + m[0].length)
+        ranges.push(r)
+        if (ranges.length >= 3000) break outer
+      }
+    }
+    rangesRef.current = ranges
+    setMatchCount(ranges.length)
+    setMatchIdx(0)
+    if (ranges.length > 0) registry.set('log-match', new HL(...ranges))
+  }, [html, query, mode])
+
+  useEffect(() => {
+    const registry = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights
+    const HL = (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+    if (!registry || !HL) return
+    registry.delete('log-match-current')
+    const r = rangesRef.current[matchIdx]
+    if (!r) return
+    registry.set('log-match-current', new HL(r))
+  }, [matchIdx, matchCount])
+
+  const gotoMatch = (dir: 1 | -1) => {
+    if (matchCount === 0) return
+    setFollow(false)
+    const next = (matchIdx + dir + matchCount) % matchCount
+    setMatchIdx(next)
+    rangesRef.current[next]?.startContainer.parentElement?.scrollIntoView({ block: 'center' })
+  }
 
   const running = procInfo?.status === 'running'
 
@@ -188,6 +253,12 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              gotoMatch(e.shiftKey ? -1 : 1)
+            }
+          }}
           placeholder={mode === 'regex' ? 'regex search logs…' : mode === 'fuzzy' ? 'fuzzy search logs…' : 'search logs…'}
           className={`h-7 w-56 text-xs ${regex?.error ? 'border-red-500/70' : ''}`}
         />
@@ -207,14 +278,36 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
             </button>
           ))}
         </div>
+        <div className="flex items-center gap-1.5">
+          <Checkbox
+            id={`filter-${app}-${proc}`}
+            checked={filterMode}
+            onCheckedChange={(v) => setFilterMode(v === true)}
+            className="size-3.5"
+          />
+          <Label htmlFor={`filter-${app}-${proc}`} className="text-[11px] text-muted-foreground">
+            filter
+          </Label>
+        </div>
         {regex?.error ? (
           <span className="max-w-72 truncate text-[11px] text-red-400" title={regex.error}>
             invalid regex
           </span>
         ) : (
           query && (
-            <span className="text-[11px] text-muted-foreground">
-              {visible.length} / {lines.length} lines
+            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              {filterMode && `${visible.length} / ${lines.length} lines`}
+              {mode !== 'fuzzy' && matchCount > 0 && (
+                <>
+                  <span className="tabular-nums">{matchIdx + 1}/{matchCount}</span>
+                  <button className="rounded p-0.5 hover:bg-accent" title="Previous match (Shift+Enter)" onClick={() => gotoMatch(-1)}>
+                    <ChevronUp className="size-3" />
+                  </button>
+                  <button className="rounded p-0.5 hover:bg-accent" title="Next match (Enter)" onClick={() => gotoMatch(1)}>
+                    <ChevronDown className="size-3" />
+                  </button>
+                </>
+              )}
             </span>
           )
         )}

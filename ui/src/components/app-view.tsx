@@ -215,6 +215,7 @@ export function AppView({
               <TableHead className="w-20">CPU</TableHead>
               <TableHead className="w-24">Memory</TableHead>
               <TableHead className="w-28">CPU (10m)</TableHead>
+              <TableHead className="w-28">Mem (10m)</TableHead>
               <TableHead className="w-52 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -239,6 +240,9 @@ export function AppView({
                 <TableCell className="text-xs tabular-nums">{p.metrics ? `${p.metrics.memMb} MB` : '—'}</TableCell>
                 <TableCell className="text-sky-600 dark:text-sky-400">
                   <Sparkline values={(history[p.name] ?? []).map((m) => m.cpu)} />
+                </TableCell>
+                <TableCell className="text-violet-600 dark:text-violet-400">
+                  <Sparkline values={(history[p.name] ?? []).map((m) => m.memMb)} />
                 </TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-1">
@@ -271,6 +275,44 @@ export function AppView({
                       <FileText className="size-3" /> logs
                     </Button>
                   </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+
+      <Card className="gap-0 overflow-hidden py-0">
+        <div className="border-b px-4 py-2.5 text-sm font-medium">Configuration</div>
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Process</TableHead>
+              <TableHead>Command</TableHead>
+              <TableHead className="w-24">Ports</TableHead>
+              <TableHead className="w-40">Health</TableHead>
+              <TableHead className="w-28">Depends on</TableHead>
+              <TableHead className="w-20">Env</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {app.processes.map((p) => (
+              <TableRow key={p.name}>
+                <TableCell className="text-xs font-medium">{p.name}</TableCell>
+                <TableCell className="max-w-72 font-mono text-[11px] text-muted-foreground">
+                  <div className="truncate" title={p.command}>{p.command}</div>
+                  {p.devCommand && (
+                    <div className="truncate text-sky-600 dark:text-sky-400" title={p.devCommand}>dev: {p.devCommand}</div>
+                  )}
+                  {p.cwd && <div className="truncate">cwd: {p.cwd}</div>}
+                </TableCell>
+                <TableCell className="font-mono text-[11px]">{p.ports.length > 0 ? p.ports.join(', ') : '—'}</TableCell>
+                <TableCell className="max-w-40 truncate font-mono text-[11px]" title={p.healthUrl ?? undefined}>
+                  {p.healthUrl ?? (p.healthPort ? `tcp:${p.healthPort}` : '—')}
+                </TableCell>
+                <TableCell className="font-mono text-[11px]">{p.dependsOn.length > 0 ? p.dependsOn.join(', ') : '—'}</TableCell>
+                <TableCell className="text-[11px] text-muted-foreground" title={Object.keys(p.env).join(', ')}>
+                  {Object.keys(p.env).length > 0 ? `${Object.keys(p.env).length} vars` : '—'}
                 </TableCell>
               </TableRow>
             ))}

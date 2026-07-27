@@ -15,6 +15,7 @@
     "ansi_up": "^6.0.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "dockview-react": "^7.0.4",
     "lucide-react": "^1.26.0",
     "radix-ui": "^1.6.7",

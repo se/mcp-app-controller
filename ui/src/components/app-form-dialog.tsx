@@ -25,11 +25,12 @@ interface ProcForm {
   healthPort: string
   ownLogTimestamps: boolean
   ports: string
+  dependsOn: string
 }
 
 const emptyProc: ProcForm = {
   name: '', command: '', devCommand: '', cwd: '', env: {}, autoRestart: false,
-  healthUrl: '', healthPort: '', ownLogTimestamps: false, ports: '',
+  healthUrl: '', healthPort: '', ownLogTimestamps: false, ports: '', dependsOn: '',
 }
 
 export function AppFormDialog({
@@ -69,6 +70,7 @@ export function AppFormDialog({
           healthPort: p.healthPort != null ? String(p.healthPort) : '',
           ownLogTimestamps: p.ownLogTimestamps ?? false,
           ports: (p.ports ?? []).join(', '),
+          dependsOn: (p.dependsOn ?? []).join(', '),
         }))
       )
     } else {
@@ -104,6 +106,7 @@ export function AppFormDialog({
           .split(/[\s,]+/)
           .map((x) => Number(x))
           .filter((n) => Number.isInteger(n) && n > 0),
+        dependsOn: p.dependsOn.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
       })),
     }
     try {
@@ -184,10 +187,15 @@ export function AppFormDialog({
                   <Input value={p.healthPort} onChange={(e) => updateProc(i, { healthPort: e.target.value })}
                     placeholder="3000" inputMode="numeric" className="font-mono text-xs" />
                 </div>
-                <div className="col-span-2 grid gap-1.5">
-                  <Label>Ports (optional, comma separated — checked before start to catch conflicts)</Label>
+                <div className="grid gap-1.5">
+                  <Label>Ports (optional, comma separated)</Label>
                   <Input value={p.ports} onChange={(e) => updateProc(i, { ports: e.target.value })}
                     placeholder="4070, 4470" className="font-mono text-xs" />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label>Depends on (optional, process names)</Label>
+                  <Input value={p.dependsOn} onChange={(e) => updateProc(i, { dependsOn: e.target.value })}
+                    placeholder="api, account" className="font-mono text-xs" />
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">

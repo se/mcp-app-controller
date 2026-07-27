@@ -18,14 +18,27 @@ export const ProcessDefSchema = z.object({
   ownLogTimestamps: z.boolean().default(false),
   // TCP ports this process binds; checked before start (fail fast on conflicts, reclaim own orphans)
   ports: z.array(z.number().int()).default([]),
+  // Sibling processes that must be running (and healthy, if they have a health check)
+  // before this one starts. Missing deps are auto-started first.
+  dependsOn: z.array(z.string()).default([]),
 });
 
-export const AppDefSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().default(''),
-  cwd: z.string().min(1),
-  processes: z.array(ProcessDefSchema).min(1),
-});
+export const AppDefSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().default(''),
+    cwd: z.string().min(1),
+    processes: z.array(ProcessDefSchema).min(1),
+  })
+  .superRefine((app, ctx) => {
+    const names = new Set(app.processes.map((p) => p.name));
+    for (const p of app.processes) {
+      for (const d of p.dependsOn) {
+        if (d === p.name) ctx.addIssue({ code: 'custom', message: `process '${p.name}' cannot depend on itself` });
+        else if (!names.has(d)) ctx.addIssue({ code: 'custom', message: `process '${p.name}' dependsOn unknown process '${d}'` });
+      }
+    }
+  });
 
 const ConfigFileSchema = z.object({
   apps: z.array(AppDefSchema).default([]),
@@ -33,6 +46,15 @@ const ConfigFileSchema = z.object({
   // every managed process (e.g. /opt/homebrew/bin/fish). Decouples app env from the
   // user's registered default shell — works even if chsh was never run.
   envShell: z.string().optional(),
+  // Crash notifications (throttled to one per process per 5 minutes)
+  notify: z
+    .object({
+      macos: z.boolean().default(true),
+      slackWebhook: z.string().optional(),
+    })
+    .default({ macos: true }),
+  // Named groups of targets ("app" or "app/process") for one-shot start/stop
+  profiles: z.record(z.array(z.string())).default({}),
 });
 
 export type ProcessDef = z.infer<typeof ProcessDefSchema>;
@@ -41,6 +63,8 @@ export type AppDef = z.infer<typeof AppDefSchema>;
 export class ConfigStore {
   apps: AppDef[] = [];
   envShell?: string;
+  notify: { macos: boolean; slackWebhook?: string } = { macos: true };
+  profiles: Record<string, string[]> = {};
   onReload?: () => void;
   private saving = false;
 
@@ -57,6 +81,8 @@ export class ConfigStore {
     const parsed = ConfigFileSchema.parse(YAML.parse(raw) ?? {});
     this.apps = parsed.apps;
     this.envShell = parsed.envShell;
+    this.notify = parsed.notify;
+    this.profiles = parsed.profiles;
   }
 
   private watch(): void {
@@ -86,6 +112,8 @@ export class ConfigStore {
     try {
       const doc: Record<string, unknown> = { apps: this.apps };
       if (this.envShell) doc.envShell = this.envShell;
+      if (Object.keys(this.profiles).length > 0) doc.profiles = this.profiles;
+      if (!this.notify.macos || this.notify.slackWebhook) doc.notify = this.notify;
       fs.writeFileSync(this.filePath, YAML.stringify(doc));
     } finally {
       setTimeout(() => (this.saving = false), 1000);

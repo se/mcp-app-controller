@@ -134,10 +134,26 @@ Recommended addition to your global `~/.claude/CLAUDE.md` so sessions actually u
 | `list_apps` | All apps, process statuses, pids, modes, cpu/mem, active leases |
 | `start_app` / `stop_app` / `restart_app` | Manage an app or a single process (`mode: start\|dev`, requires `reason`) |
 | `app_logs` | Last N log lines (stdout+stderr, timestamped) |
+| `app_errors` | Only the recent error/warning lines, deduplicated with counts |
 | `wait_for_log` | Block until a log line matches a regex (readiness / next error), with timeout + lookback |
 | `claim_app` / `release_app` | Hold an app for a longer task so other sessions get warned |
 | `define_app` / `remove_app` | Manage app definitions |
+| `start_profile` / `stop_profile` | Start/stop a named group of apps (profiles in apps.yaml) |
 | `recent_activity` | Audit trail: who did what, when, why |
+
+### Dependencies & profiles
+
+A process can declare `dependsOn: [api]` — dependencies auto-start first (recursively) and
+are awaited until healthy (or running, if no health check) before the dependent starts.
+Whole-app starts follow topological order. `profiles:` in apps.yaml names groups of targets
+("app" or "app/process") startable/stoppable in one action from the sidebar or MCP.
+
+### Notifications & log rotation
+
+Crashes trigger a macOS notification (and an optional Slack webhook via
+`notify.slackWebhook` in apps.yaml), throttled per process. Log files rotate at
+`APPCTRL_LOG_MAX_MB` (default 20 MB), keeping two previous generations. Logs are also
+exposed as MCP resources (`logs://<app>/<process>`).
 
 ### Boot restore
 

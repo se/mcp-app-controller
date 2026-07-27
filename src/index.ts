@@ -7,6 +7,7 @@ import { Controller } from './controller.js';
 import { HealthMonitor } from './health.js';
 import { MetricsMonitor } from './metrics.js';
 import { captureShellEnv } from './env.js';
+import { startNotifier } from './notify.js';
 import { restoreOnBoot } from './restore.js';
 import { createHttpServer } from './http.js';
 
@@ -29,6 +30,7 @@ controller.metrics = metrics;
 metrics.hydrate(store.getKv('metrics_history'));
 metrics.start();
 setInterval(() => store.setKv('metrics_history', metrics.serialize()), 60_000);
+startNotifier(config);
 
 // Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
 // independent of the user's registered default shell.

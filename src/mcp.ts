@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Controller, ActorCtx, ConflictInfo, ProcResult } from './controller.js';
 import { AppDefSchema } from './config.js';
@@ -66,6 +66,10 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       const state = controller.fullState();
       if (state.apps.length === 0) return text('No apps registered yet. Use define_app to register one.');
       const lines: string[] = [];
+      const profNames = Object.keys(state.profiles);
+      if (profNames.length > 0) {
+        lines.push(`Profiles: ${profNames.map((n) => `${n} → [${state.profiles[n].join(', ')}]`).join('; ')}`);
+      }
       for (const app of state.apps) {
         lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''} (cwd: ${app.cwd})`);
         if (app.lease) {
@@ -174,6 +178,79 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
   );
 
   server.registerTool(
+    'app_errors',
+    {
+      title: 'Recent errors',
+      description:
+        'Scan a process\'s recent logs and return ONLY the error/warning lines (with adjacent stack-trace lines grouped), deduplicated with counts and timestamps. ' +
+        'Much cheaper than reading full app_logs when you just need to know what is failing.',
+      inputSchema: {
+        app: z.string(),
+        process: z.string().optional().describe('Omit to scan every process of the app'),
+        minutes: z.number().int().min(1).max(1440).default(30).describe('Only consider lines from the last N minutes'),
+        lines: z.number().int().min(50).max(2000).default(600).describe('How many tail lines to scan per process'),
+      },
+    },
+    async ({ app, process: proc, minutes, lines }) => {
+      const appDef = controller.requireApp(app);
+      const procs = controller.selectProcesses(appDef, proc);
+      const cutoff = Date.now() - minutes * 60_000;
+      const errRe = /error|exception|fatal|unhandled|panic|EADDRINUSE|address already in use|failed|warn/i;
+      const contRe = /^\s+at |^\s{3,}|^Caused by|^\s*---/;
+      const out: string[] = [];
+
+      for (const p of procs) {
+        const raw = controller.pm.readLogs(app, p.name, lines, true).split('\n');
+        type Group = { text: string; count: number; first: string; last: string };
+        const groups = new Map<string, Group>();
+        let current: string[] | null = null;
+        let currentTs = '';
+
+        const flush = () => {
+          if (!current) return;
+          const text = current.slice(0, 6).join('\n');
+          const dedupKey = current[0].replace(/\d+/g, '#').slice(0, 160);
+          const g = groups.get(dedupKey);
+          if (g) {
+            g.count++;
+            g.last = currentTs;
+          } else {
+            groups.set(dedupKey, { text, count: 1, first: currentTs, last: currentTs });
+          }
+          current = null;
+        };
+
+        for (const rawLine of raw) {
+          const m = rawLine.match(/^\[(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\]\s?(.*)$/);
+          const ts = m ? m[1] : '';
+          const body = m ? m[2] : rawLine;
+          if (ts && Date.parse(ts) < cutoff) continue;
+          if (body.startsWith('--- [controller]')) { flush(); continue; }
+          if (current && contRe.test(body)) {
+            current.push(body);
+            continue;
+          }
+          flush();
+          if (errRe.test(body) && body.trim()) {
+            current = [body.trim()];
+            currentTs = ts;
+          }
+        }
+        flush();
+
+        if (groups.size > 0) {
+          out.push(`=== ${app}/${p.name} — ${groups.size} distinct error(s) in last ${minutes}m ===`);
+          for (const g of groups.values()) {
+            const when = g.count > 1 ? `${g.count}x, first ${g.first}, last ${g.last}` : g.last || 'unknown time';
+            out.push(`[${when}]\n${g.text}`);
+          }
+        }
+      }
+      return text(out.length > 0 ? out.join('\n\n') : `No error/warning lines found in the last ${minutes} minutes.`);
+    }
+  );
+
+  server.registerTool(
     'wait_for_log',
     {
       title: 'Wait for log line',
@@ -235,6 +312,48 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       return text(
         `TIMEOUT: no line matching /${pattern}/i appeared within ${timeout_seconds}s.\nLast 5 log lines:\n${context || '(no logs)'}`
       );
+    }
+  );
+
+  server.registerTool(
+    'start_profile',
+    {
+      title: 'Start profile',
+      description:
+        'Start every target of a named profile (profiles are defined in apps.yaml, e.g. "dev: [monosign, monopam/app-vue]"). Targets start with dependency ordering; lease conflicts are reported per app.',
+      inputSchema: {
+        profile: z.string(),
+        mode: modeSchema.default('start'),
+        reason: z.string(),
+        wait_ready: z.boolean().default(true),
+      },
+    },
+    async ({ profile, mode, reason, wait_ready }) => {
+      const targets = controller.resolveProfile(profile);
+      const lines: string[] = [];
+      for (const t of targets) {
+        const res = await controller.start(t.app, t.proc, mode, reason, actor, false, wait_ready);
+        lines.push((fmtState(res, t.app).content[0] as { text: string }).text);
+      }
+      return text(lines.join('\n') || `Profile '${profile}' has no valid targets.`);
+    }
+  );
+
+  server.registerTool(
+    'stop_profile',
+    {
+      title: 'Stop profile',
+      description: 'Stop every target of a named profile.',
+      inputSchema: { profile: z.string(), reason: z.string() },
+    },
+    async ({ profile, reason }) => {
+      const targets = controller.resolveProfile(profile);
+      const lines: string[] = [];
+      for (const t of [...targets].reverse()) {
+        const res = await controller.stop(t.app, t.proc, reason, actor, false);
+        lines.push((fmtState(res, t.app).content[0] as { text: string }).text);
+      }
+      return text(lines.join('\n') || `Profile '${profile}' has no valid targets.`);
     }
   );
 
@@ -304,6 +423,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
               healthPort: z.number().int().optional().describe('Optional readiness TCP port on 127.0.0.1 (used when no healthUrl)'),
               ownLogTimestamps: z.boolean().default(false).describe('Set true if the app\'s log lines already contain timestamps (UI then hides the controller prefix)'),
               ports: z.array(z.number().int()).default([]).describe('TCP ports the process binds — checked before start to fail fast on conflicts'),
+              dependsOn: z.array(z.string()).default([]).describe('Sibling process names that must be running (and healthy if they have a check) before this one starts; missing deps auto-start first'),
             })
           )
           .min(1),
@@ -361,6 +481,31 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         return `${t} [${r.source}:${r.session}] ${r.action} ${target} → ${r.result}${r.detail ? ` (${r.detail})` : ''}`;
       });
       return text(lines.join('\n'));
+    }
+  );
+
+  // Logs as MCP resources: readable/attachable via logs://<app>/<process>
+  server.registerResource(
+    'process-logs',
+    new ResourceTemplate('logs://{app}/{proc}', {
+      list: async () => ({
+        resources: controller.config.apps.flatMap((a) =>
+          a.processes.map((p) => ({
+            uri: `logs://${a.name}/${p.name}`,
+            name: `${a.name}/${p.name} logs`,
+            description: `Last log lines of ${a.name}/${p.name}`,
+            mimeType: 'text/plain',
+          }))
+        ),
+      }),
+    }),
+    { description: 'Recent log output of a managed process (ANSI-stripped)' },
+    async (uri, vars) => {
+      const app = String(vars.app);
+      const proc = String(vars.proc);
+      controller.requireApp(app);
+      const logs = controller.pm.readLogs(app, proc, 300, true);
+      return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: logs || '(no logs yet)' }] };
     }
   );
 

@@ -248,6 +248,7 @@ export class ProcessManager {
           detail: `exit code=${code} signal=${signal ?? 'none'}`,
           result: 'crashed',
         });
+        bus.emit('crash', { app: appDef.name, proc: procDef.name, code, summary: exit.summary });
         if (procDef.autoRestart && entry.restartCount < 3) {
           const delay = 2000 * (entry.restartCount + 1);
           this.appendLog(key, `--- [controller] auto-restarting in ${delay}ms (attempt ${entry.restartCount + 1}/3)`);
@@ -311,15 +312,35 @@ export class ProcessManager {
     );
   }
 
+  private appendCounts = new Map<string, number>();
+
   private appendLog(key: string, line: string): void {
     const [app, proc] = key.split('/');
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
     try {
-      fs.appendFileSync(this.logFile(app, proc), stamped);
+      const file = this.logFile(app, proc);
+      fs.appendFileSync(file, stamped);
+      // Rotation: check size every 500 appends per process
+      const n = (this.appendCounts.get(key) ?? 0) + 1;
+      this.appendCounts.set(key, n);
+      if (n % 500 === 0) this.rotateIfNeeded(file);
     } catch {
       // best effort
     }
     bus.emit('log', { app, proc, line: stamped.trimEnd() });
+  }
+
+  /** Rotate <file> → <file>.1 → <file>.2 when it exceeds APPCTRL_LOG_MAX_MB (default 20). */
+  private rotateIfNeeded(file: string): void {
+    const maxBytes = (Number(process.env.APPCTRL_LOG_MAX_MB) || 20) * 1024 * 1024;
+    try {
+      if (fs.statSync(file).size < maxBytes) return;
+      if (fs.existsSync(`${file}.2`)) fs.unlinkSync(`${file}.2`);
+      if (fs.existsSync(`${file}.1`)) fs.renameSync(`${file}.1`, `${file}.2`);
+      fs.renameSync(file, `${file}.1`);
+    } catch {
+      // best effort
+    }
   }
 
   readLogs(app: string, proc: string, lines = 100, stripAnsi = false): string {
