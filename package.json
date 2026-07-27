@@ -7,8 +7,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc && npm --prefix ui run build",
-    "build:ui": "npm --prefix ui run build",
+    "build": "tsc && npm run build:ui",
+    "build:ui": "npm --prefix ui install --no-audit --no-fund && npm --prefix ui run build",
     "restart": "scripts/restart-daemon.sh",
     "deploy": "npm run build && scripts/restart-daemon.sh",
     "dev:ui": "npm --prefix ui run dev",
