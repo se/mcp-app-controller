@@ -126,6 +126,9 @@ export async function appActionWithTakeover(
 export const releaseLease = (app: string) =>
   api(`/apps/${encodeURIComponent(app)}/release-lease`, { method: 'POST', body: '{}' })
 
+export const clearAudit = (olderThanDays?: number) =>
+  api<{ removed: number }>(`/audit${olderThanDays ? `?olderThanDays=${olderThanDays}` : ''}`, { method: 'DELETE' })
+
 export const saveApp = (def: AppDefInput) => api('/apps', { method: 'POST', body: JSON.stringify(def) })
 export const deleteApp = (app: string) => api(`/apps/${encodeURIComponent(app)}`, { method: 'DELETE' })
 

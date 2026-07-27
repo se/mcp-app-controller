@@ -89,6 +89,18 @@ export function createHttpServer(controller: Controller) {
     res.json(controller.store.recentAudit(limit, (req.query.app as string) || undefined));
   });
 
+  api.delete('/audit', (req, res) => {
+    const days = Number(req.query.olderThanDays);
+    const olderThanMs = Number.isFinite(days) && days > 0 ? days * 86400_000 : undefined;
+    const removed = controller.store.clearAudit(olderThanMs);
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'clear_activity', app: '*',
+      detail: olderThanMs ? `entries older than ${days}d` : 'all entries',
+      result: `${removed} removed`,
+    });
+    res.json({ removed });
+  });
+
   api.post('/apps/:app/start', async (req, res) => {
     const { process: proc, mode = 'start', reason = 'manual start from UI', waitReady = false, takeover = false } = req.body ?? {};
     const r = await controller.start(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);

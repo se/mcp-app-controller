@@ -18,9 +18,16 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtAgo, type AppInfo, type AuditEntry } from '@/lib/api'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { clearAudit, fmtAgo, type AppInfo, type AuditEntry } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 
 const PAGE_SIZE = 15
 
@@ -96,6 +103,30 @@ export function ActivityPage({ entries, apps }: { entries: AuditEntry[]; apps: A
         <span className="ml-auto text-xs text-muted-foreground">
           {filtered.length} entries
         </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8 text-xs">
+              <Trash2 className="size-3.5" /> Clear
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => void clearAudit(1)}>
+              Older than 1 day
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void clearAudit(7)}>
+              Older than 7 days
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => {
+                if (confirm('Clear the entire activity log? This cannot be undone.')) void clearAudit()
+              }}
+            >
+              Clear all
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <Card className="overflow-hidden py-0">

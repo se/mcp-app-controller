@@ -72,6 +72,15 @@ export class Store {
     return full;
   }
 
+  /** Delete audit entries; omit olderThanMs to clear everything. Returns removed count. */
+  clearAudit(olderThanMs?: number): number {
+    const res =
+      olderThanMs != null
+        ? this.db.prepare(`DELETE FROM audit WHERE ts < ?`).run(Date.now() - olderThanMs)
+        : this.db.prepare(`DELETE FROM audit`).run();
+    return res.changes;
+  }
+
   recentAudit(limit = 50, app?: string): AuditEntry[] {
     if (app) {
       return this.db
