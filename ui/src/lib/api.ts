@@ -80,11 +80,48 @@ export const getAudit = (limit = 60) => api<AuditEntry[]>(`/audit?limit=${limit}
 export const getLogs = (app: string, proc: string, lines = 300) =>
   api<{ logs: string }>(`/apps/${encodeURIComponent(app)}/logs/${encodeURIComponent(proc)}?lines=${lines}`)
 
+export interface ActionResult {
+  proc: string
+  error?: string
+  superseded?: string
+}
+
 export const appAction = (
   app: string,
   action: 'start' | 'stop' | 'restart',
+  body: { process?: string; mode?: 'start' | 'dev'; reason?: string; takeover?: boolean }
+) =>
+  api<ActionResult[] | { blocked: true }>(`/apps/${encodeURIComponent(app)}/${action}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/**
+ * Run a start/stop/restart action; on a port-in-use error, offer to take over the
+ * foreign process (stop it and run ours under the controller) and retry.
+ */
+export async function appActionWithTakeover(
+  app: string,
+  action: 'start' | 'stop' | 'restart',
   body: { process?: string; mode?: 'start' | 'dev'; reason?: string }
-) => api(`/apps/${encodeURIComponent(app)}/${action}`, { method: 'POST', body: JSON.stringify(body) })
+): Promise<void> {
+  const findErr = (res: ActionResult[] | { blocked: true }) =>
+    Array.isArray(res) ? res.find((r) => r.error) : undefined
+  const res = await appAction(app, action, body)
+  const err = findErr(res)
+  if (!err?.error) return
+  if (/already in use/.test(err.error)) {
+    const ok = confirm(
+      `${err.error}\n\nTake over? The process holding the port will be stopped and this one will run under App Controller instead.`
+    )
+    if (!ok) return
+    const retry = await appAction(app, action, { ...body, takeover: true })
+    const still = findErr(retry)
+    if (still?.error) alert(still.error)
+    return
+  }
+  alert(err.error)
+}
 
 export const releaseLease = (app: string) =>
   api(`/apps/${encodeURIComponent(app)}/release-lease`, { method: 'POST', body: '{}' })

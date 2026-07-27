@@ -5,7 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { appAction, getLogs, getState, type ProcInfo } from '@/lib/api'
+import { appActionWithTakeover, getLogs, getState, type ProcInfo } from '@/lib/api'
 import { logBus, stateBus } from '@/lib/log-bus'
 import { cn } from '@/lib/utils'
 import { Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
@@ -72,7 +72,7 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
   const act = async (action: 'start' | 'stop' | 'restart', runMode?: 'start' | 'dev') => {
     setBusy(true)
     try {
-      await appAction(app, action, {
+      await appActionWithTakeover(app, action, {
         process: proc,
         mode: runMode,
         reason: `manual ${action}${runMode === 'dev' ? ' (dev)' : ''} from log panel`,

@@ -98,7 +98,8 @@ export class Controller {
     reason: string,
     actor: ActorCtx,
     force = false,
-    waitReady = false
+    waitReady = false,
+    takeover = false
   ): Promise<ConflictInfo | ProcResult[]> {
     const app = this.requireApp(appName);
     const conflict = this.checkConflict(appName, actor, force);
@@ -110,7 +111,7 @@ export class Controller {
         `start(${mode}) by ${actor.session}`,
         async (): Promise<ProcResult> => {
           try {
-            const state = await this.pm.start(app, p, mode, actor.session, actor.source);
+            const state = await this.pm.start(app, p, mode, actor.session, actor.source, takeover);
             this.store.audit({
               session: actor.session, source: actor.source, action: `start(${mode})`,
               app: appName, proc: p.name, detail: reason, result: state.status,
@@ -184,7 +185,8 @@ export class Controller {
     reason: string,
     actor: ActorCtx,
     force = false,
-    waitReady = false
+    waitReady = false,
+    takeover = false
   ): Promise<ConflictInfo | ProcResult[]> {
     const app = this.requireApp(appName);
     const conflict = this.checkConflict(appName, actor, force);
@@ -199,7 +201,7 @@ export class Controller {
           const nextMode: Mode = mode ?? prev.mode ?? 'start';
           try {
             await this.pm.stop(appName, p.name);
-            const state = await this.pm.start(app, p, nextMode, actor.session, actor.source);
+            const state = await this.pm.start(app, p, nextMode, actor.session, actor.source, takeover);
             this.store.audit({
               session: actor.session, source: actor.source, action: `restart(${nextMode})`,
               app: appName, proc: p.name, detail: reason, result: state.status,

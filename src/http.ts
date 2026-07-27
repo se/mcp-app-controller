@@ -90,8 +90,8 @@ export function createHttpServer(controller: Controller) {
   });
 
   api.post('/apps/:app/start', async (req, res) => {
-    const { process: proc, mode = 'start', reason = 'manual start from UI', waitReady = false } = req.body ?? {};
-    const r = await controller.start(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady);
+    const { process: proc, mode = 'start', reason = 'manual start from UI', waitReady = false, takeover = false } = req.body ?? {};
+    const r = await controller.start(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);
     res.json(r);
   });
 
@@ -102,8 +102,8 @@ export function createHttpServer(controller: Controller) {
   });
 
   api.post('/apps/:app/restart', async (req, res) => {
-    const { process: proc, mode, reason = 'manual restart from UI', waitReady = false } = req.body ?? {};
-    const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady);
+    const { process: proc, mode, reason = 'manual restart from UI', waitReady = false, takeover = false } = req.body ?? {};
+    const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);
     res.json(r);
   });
 

@@ -80,10 +80,11 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         reason: z.string().describe('Why you are starting it, e.g. "testing auth fix on login page"'),
         force: z.boolean().default(false).describe('Override another session\'s lease. Use only when certain.'),
         wait_ready: z.boolean().default(true).describe('If the process has a health check defined, wait (max 30s) until it reports healthy before returning.'),
+        takeover: z.boolean().default(false).describe('If a declared port is held by a process NOT started by the controller (e.g. started manually in a terminal), stop that process and run this one under controller management instead. Use only after a port-in-use error, when taking ownership is intended.'),
       },
     },
-    async ({ app, process: proc, mode, reason, force, wait_ready }) => {
-      const res = await controller.start(app, proc, mode, reason, actor, force, wait_ready);
+    async ({ app, process: proc, mode, reason, force, wait_ready, takeover }) => {
+      const res = await controller.start(app, proc, mode, reason, actor, force, wait_ready, takeover);
       return fmtState(res, app);
     }
   );
@@ -120,10 +121,11 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         reason: z.string().describe('Why you are restarting it'),
         force: z.boolean().default(false),
         wait_ready: z.boolean().default(true).describe('If the process has a health check defined, wait (max 30s) until it reports healthy before returning.'),
+        takeover: z.boolean().default(false).describe('If a declared port is held by a process NOT started by the controller, stop it and run this process under controller management instead.'),
       },
     },
-    async ({ app, process: proc, mode, reason, force, wait_ready }) => {
-      const res = await controller.restart(app, proc, mode, reason, actor, force, wait_ready);
+    async ({ app, process: proc, mode, reason, force, wait_ready, takeover }) => {
+      const res = await controller.restart(app, proc, mode, reason, actor, force, wait_ready, takeover);
       return fmtState(res, app);
     }
   );

@@ -98,28 +98,50 @@ export class ProcessManager {
     }
   }
 
+  /** Kill a process group holding a port and wait for the port to free up. */
+  private async killPortHolder(
+    holder: { pid: number; pgid: number }, port: number
+  ): Promise<boolean> {
+    try { process.kill(-holder.pgid, 'SIGTERM'); } catch { try { process.kill(holder.pid, 'SIGTERM'); } catch { /* gone */ } }
+    for (let i = 0; i < 12 && (await isPortInUse(port)); i++) await sleep(500);
+    if (await isPortInUse(port)) {
+      try { process.kill(-holder.pgid, 'SIGKILL'); } catch { try { process.kill(holder.pid, 'SIGKILL'); } catch { /* gone */ } }
+      await sleep(500);
+    }
+    return !(await isPortInUse(port));
+  }
+
   /**
    * Fail fast if a declared port is already bound. If the holder is an orphan of a
    * previous run of THIS process (recorded pid/pgid), reclaim it and continue.
+   * With takeover=true, a FOREIGN holder (started outside the controller) is also
+   * stopped so the process can run under controller management instead.
    */
-  private async ensurePortsFree(app: string, procDef: ProcessDef, key: string): Promise<void> {
+  private async ensurePortsFree(
+    app: string, procDef: ProcessDef, key: string, takeover: boolean, session: string, source: string
+  ): Promise<void> {
     const recorded = this.store.listRunning().find((r) => r.app === app && r.proc === procDef.name);
     for (const port of declaredPorts(procDef)) {
       if (!(await isPortInUse(port))) continue;
       const holder = await portHolder(port);
       if (holder && recorded?.pid && (holder.pid === recorded.pid || holder.pgid === recorded.pid)) {
         this.appendLog(key, `--- [controller] port ${port} held by orphaned previous run (pid ${holder.pid}) — reclaiming`);
-        try { process.kill(-holder.pgid, 'SIGTERM'); } catch { try { process.kill(holder.pid, 'SIGTERM'); } catch { /* gone */ } }
-        for (let i = 0; i < 10 && (await isPortInUse(port)); i++) await sleep(500);
-        if (await isPortInUse(port)) {
-          try { process.kill(-holder.pgid, 'SIGKILL'); } catch { /* gone */ }
-          await sleep(500);
-        }
-        if (!(await isPortInUse(port))) continue;
+        if (await this.killPortHolder(holder, port)) continue;
+      } else if (holder && takeover) {
+        this.appendLog(key, `--- [controller] taking over port ${port}: stopping pid ${holder.pid} (${holder.command})`);
+        this.store.audit({
+          session, source: source as 'mcp' | 'ui' | 'system', action: 'takeover',
+          app, proc: procDef.name, detail: `stopped pid ${holder.pid} (${holder.command}) holding port ${port}`,
+          result: 'taken over',
+        });
+        if (await this.killPortHolder(holder, port)) continue;
+        throw new Error(`Takeover of port ${port} failed: pid ${holder.pid} (${holder.command}) survived SIGTERM/SIGKILL (insufficient permissions?).`);
       }
       const who = holder ? `pid ${holder.pid} (${holder.command})` : 'an unknown process';
       throw new Error(
-        `Port ${port} is already in use by ${who}. Refusing to start '${key}' — stop that process first (or remove ${port} from the port list if it's wrong).`
+        `Port ${port} is already in use by ${who} — it was not started by the controller. ` +
+        `Retry with takeover=true to stop it and run '${key}' under controller management instead, ` +
+        `or remove ${port} from the port list if it's wrong.`
       );
     }
   }
@@ -147,7 +169,10 @@ export class ProcessManager {
     return this.getState(app, proc).status === 'running';
   }
 
-  async start(appDef: AppDef, procDef: ProcessDef, mode: Mode, session: string, source: 'mcp' | 'ui' | 'system'): Promise<ProcState> {
+  async start(
+    appDef: AppDef, procDef: ProcessDef, mode: Mode,
+    session: string, source: 'mcp' | 'ui' | 'system', takeover = false
+  ): Promise<ProcState> {
     const key = procKey(appDef.name, procDef.name);
     if (this.isRunning(appDef.name, procDef.name)) {
       return this.getState(appDef.name, procDef.name);
@@ -161,7 +186,7 @@ export class ProcessManager {
       throw new Error(`Working directory does not exist: ${cwd}`);
     }
 
-    await this.ensurePortsFree(appDef.name, procDef, key);
+    await this.ensurePortsFree(appDef.name, procDef, key, takeover, session, source);
 
     this.appendLog(key, `--- [controller] starting (mode=${mode}, by=${session}): ${command}`);
     const child = spawn(command, {

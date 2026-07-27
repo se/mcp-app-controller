@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import { appAction, deleteApp, fmtUptime, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
+import { appActionWithTakeover, deleteApp, fmtUptime, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
 import { FileText, Lock, Pencil, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -62,11 +62,11 @@ export function AppCard({
         </div>
         <div className="flex shrink-0 gap-1.5">
           <Button variant="outline" size="sm" disabled={busy !== null}
-            onClick={() => run('start-all', () => appAction(app.name, 'start', { mode: 'start', reason: 'manual start-all from UI' }))}>
+            onClick={() => run('start-all', () => appActionWithTakeover(app.name, 'start', { mode: 'start', reason: 'manual start-all from UI' }))}>
             <Play className="size-3.5" /> start all
           </Button>
           <Button variant="outline" size="sm" disabled={busy !== null}
-            onClick={() => run('stop-all', () => appAction(app.name, 'stop', { reason: 'manual stop-all from UI' }))}>
+            onClick={() => run('stop-all', () => appActionWithTakeover(app.name, 'stop', { reason: 'manual stop-all from UI' }))}>
             <Square className="size-3.5" /> stop all
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={onEdit} title="Edit app">
@@ -131,23 +131,23 @@ export function AppCard({
                 {p.status === 'running' ? (
                   <>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appAction(app.name, 'restart', { process: p.name, reason: 'manual restart from UI' }))}>
+                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'restart', { process: p.name, reason: 'manual restart from UI' }))}>
                       <RotateCw className="size-3" /> restart
                     </Button>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appAction(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
+                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
                       <Square className="size-3" /> stop
                     </Button>
                   </>
                 ) : (
                   <>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appAction(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
+                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
                       <Play className="size-3" /> start
                     </Button>
                     {p.devCommand && (
                       <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={busy !== null}
-                        onClick={() => run(p.name, () => appAction(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
+                        onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
                         <Wrench className="size-3" /> dev
                       </Button>
                     )}

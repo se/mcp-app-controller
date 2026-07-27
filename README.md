@@ -146,7 +146,10 @@ with `APPCTRL_NO_RESTORE=1`.
 A process can declare the TCP ports it binds (`ports: [4070, 4470]`; health ports/URLs are
 included automatically). Before starting, the daemon verifies they are free: if the holder
 is an orphan of a previous run of the same process it is reclaimed automatically, otherwise
-the start fails fast with the holder's pid and command. When a process crashes, the daemon
+the start fails fast with the holder's pid and command. If the holder was started *outside*
+the controller (e.g. manually in a terminal), pass `takeover: true` (MCP) or confirm the
+takeover prompt (UI) to stop it and run the process under controller management instead —
+the takeover is recorded in the audit trail. When a process crashes, the daemon
 extracts the most plausible error line from the log tail and surfaces it everywhere —
 `list_apps`, start/restart responses, and the UI process row.
 
