@@ -1,0 +1,30 @@
+# App definitions for app-controller — copy to apps.yaml and edit.
+# apps.yaml is hot-reloaded by the daemon and can also be managed from the
+# web UI or the MCP define_app tool.
+
+apps:
+  - name: my-web-app
+    description: Example Next.js app
+    cwd: /path/to/my-web-app
+    processes:
+      - name: web
+        command: npm run start          # normal mode
+        devCommand: npm run dev         # optional, used with mode=dev
+        env: {}                         # optional extra env vars
+        autoRestart: false              # restart automatically on crash (max 3 attempts)
+        healthUrl: http://127.0.0.1:3000/   # optional readiness check (any HTTP < 500 = healthy)
+        ports: [3000]                   # ports it binds — checked before start
+        ownLogTimestamps: false         # true if the app's log lines already have timestamps
+
+  - name: my-backend
+    description: Example multi-process app
+    cwd: /path/to/my-backend
+    processes:
+      - name: api
+        command: dotnet run --project src/Api/
+        healthPort: 5000                # optional TCP readiness check
+        ports: [5000]
+      - name: worker
+        command: npm run worker
+        cwd: worker                     # optional subdirectory relative to app cwd
+        autoRestart: true

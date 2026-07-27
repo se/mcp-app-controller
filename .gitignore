@@ -1,0 +1,12 @@
+# User-specific app definitions and runtime data
+apps.yaml
+data/
+
+# Dependencies & build output
+node_modules/
+dist/
+public/
+
+# Misc
+*.log
+.DS_Store

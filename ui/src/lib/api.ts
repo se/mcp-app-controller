@@ -1,0 +1,108 @@
+export interface ProcInfo {
+  name: string
+  command: string
+  devCommand: string | null
+  cwd: string | null
+  env: Record<string, string>
+  autoRestart: boolean
+  healthUrl: string | null
+  healthPort: number | null
+  ownLogTimestamps: boolean
+  ports: number[]
+  health: 'healthy' | 'unhealthy' | 'unknown' | null
+  status: 'running' | 'stopped' | 'crashed'
+  pid?: number
+  mode?: 'start' | 'dev'
+  startedAt?: number
+  lastExit?: { code: number | null; signal: string | null; at: number; summary?: string }
+}
+
+export interface Lease {
+  app: string
+  session: string
+  reason: string
+  acquired_at: number
+  expires_at: number
+}
+
+export interface AppInfo {
+  name: string
+  description: string
+  cwd: string
+  lease: Lease | null
+  processes: ProcInfo[]
+}
+
+export interface AuditEntry {
+  id: number
+  ts: number
+  session: string
+  source: 'mcp' | 'ui' | 'system'
+  action: string
+  app: string
+  proc?: string | null
+  detail?: string | null
+  result: string
+}
+
+export interface AppDefInput {
+  name: string
+  description: string
+  cwd: string
+  processes: {
+    name: string
+    command: string
+    devCommand?: string
+    cwd?: string
+    env: Record<string, string>
+    autoRestart: boolean
+    healthUrl?: string
+    healthPort?: number
+    ownLogTimestamps?: boolean
+    ports?: number[]
+  }[]
+}
+
+export async function api<T = unknown>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch('/api' + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as { error?: string })
+    throw new Error((body as { error?: string }).error || res.statusText)
+  }
+  return res.json() as Promise<T>
+}
+
+export const getState = () => api<{ apps: AppInfo[] }>('/state')
+export const getAudit = (limit = 60) => api<AuditEntry[]>(`/audit?limit=${limit}`)
+export const getLogs = (app: string, proc: string, lines = 300) =>
+  api<{ logs: string }>(`/apps/${encodeURIComponent(app)}/logs/${encodeURIComponent(proc)}?lines=${lines}`)
+
+export const appAction = (
+  app: string,
+  action: 'start' | 'stop' | 'restart',
+  body: { process?: string; mode?: 'start' | 'dev'; reason?: string }
+) => api(`/apps/${encodeURIComponent(app)}/${action}`, { method: 'POST', body: JSON.stringify(body) })
+
+export const releaseLease = (app: string) =>
+  api(`/apps/${encodeURIComponent(app)}/release-lease`, { method: 'POST', body: '{}' })
+
+export const saveApp = (def: AppDefInput) => api('/apps', { method: 'POST', body: JSON.stringify(def) })
+export const deleteApp = (app: string) => api(`/apps/${encodeURIComponent(app)}`, { method: 'DELETE' })
+
+export function fmtAgo(ts: number): string {
+  const s = Math.round((Date.now() - ts) / 1000)
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.round(s / 60)}m ago`
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`
+  return new Date(ts).toLocaleString()
+}
+
+export function fmtUptime(startedAt: number): string {
+  const s = Math.round((Date.now() - startedAt) / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`
+}
