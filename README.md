@@ -6,6 +6,40 @@ same daemon, multiple concurrent Claude sessions can no longer fight over who "o
 starts/stops/restarts are coordinated with leases, a per-process operation queue, and a shared
 audit trail.
 
+![App Controller dashboard — status tiles, app cards with a session lease, and split log panels with ANSI colors](docs/dashboard.png)
+
+## How it works
+
+Processes live inside one central daemon. Claude Code sessions and the browser are just thin
+clients — nobody can "take over" an app, and every action is attributed and coordinated:
+
+```mermaid
+flowchart LR
+    A["Claude session A<br/>(working on web)"]
+    B["Claude session B<br/>(working on api)"]
+    U["You<br/>(web dashboard)"]
+
+    A & B -- "MCP · start / restart / logs /<br/>wait_for_log / claim" --> D
+    U -- "REST + SSE" --> D
+
+    subgraph D["app-controller daemon · :4780"]
+        direction TB
+        Q["per-process queue<br/>(last request wins)"]
+        L["leases — who is working<br/>on what, and why"]
+        H["health checks &<br/>port pre-checks"]
+        DB[("SQLite<br/>audit · leases · restore state")]
+    end
+
+    D -- "spawns & owns<br/>process groups" --> P1["web<br/>(npm run dev)"]
+    D --> P2["api<br/>(dotnet run)"]
+    D --> P3["worker"]
+```
+
+A typical multi-session moment: session A restarts `web` with a reason; the daemon takes a
+short lease. When session B tries to restart the same app seconds later, it gets a CONFLICT
+answer telling it *who* is working on the app and *why* — instead of silently killing A's
+process. You always override from the dashboard, and everything lands in the audit trail.
+
 ## Run
 
 ```bash
