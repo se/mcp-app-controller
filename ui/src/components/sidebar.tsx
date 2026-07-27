@@ -3,7 +3,7 @@ import type { AppInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { History, LayoutDashboard, Plus, Settings2 } from 'lucide-react'
 
-export type View = 'overview' | 'activity'
+export type View = 'overview' | 'activity' | `app:${string}`
 
 function appDotClass(app: AppInfo): string {
   const procs = app.processes
@@ -73,7 +73,12 @@ export function Sidebar({
             <button
               key={app.name}
               onClick={() => onSelectApp(app.name)}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                view === `app:${app.name}`
+                  ? 'bg-accent font-medium'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+              )}
             >
               <span className={cn('size-2 shrink-0 rounded-full', appDotClass(app))} />
               <span className="truncate">{app.name}</span>

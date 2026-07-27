@@ -4,7 +4,9 @@ import { Button } from '@/components/ui/button'
 import { getAudit, getState, loadPref, savePref, type AppInfo, type AuditEntry } from '@/lib/api'
 import { logBus, stateBus } from '@/lib/log-bus'
 import { ThemeProvider } from '@/lib/theme'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppCard } from '@/components/app-card'
+import { AppView } from '@/components/app-view'
 import { ActivityPage } from '@/components/activity-page'
 import { LogDock, type LogDockHandle } from '@/components/log-dock'
 import { AppFormDialog } from '@/components/app-form-dialog'
@@ -69,6 +71,14 @@ function Dashboard() {
         if (type === 'state') getState().then((s) => { setApps(s.apps); stateBus.emit(s.apps) }).catch(() => {})
         if (type === 'audit') getAudit().then(setAudit).catch(() => {})
         if (type === 'log') logBus.emit(data)
+        if (type === 'metrics') {
+          setApps((prev) =>
+            prev.map((a) => ({
+              ...a,
+              processes: a.processes.map((p) => ({ ...p, metrics: data[`${a.name}/${p.name}`] ?? null })),
+            }))
+          )
+        }
       }
     }
     connect()
@@ -80,12 +90,8 @@ function Dashboard() {
     }
   }, [refresh])
 
-  const scrollToApp = (name: string) => {
-    setView('overview')
-    setTimeout(() => {
-      document.getElementById(`app-${name}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
-  }
+  const openApp = (name: string) => setView(`app:${name}`)
+  const viewedApp = view.startsWith('app:') ? apps.find((a) => a.name === view.slice(4)) : undefined
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -94,17 +100,21 @@ function Dashboard() {
         view={view}
         onNavigate={setView}
         onNewApp={() => { setEditApp(null); setFormOpen(true) }}
-        onSelectApp={scrollToApp}
+        onSelectApp={openApp}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-between border-b bg-background px-5 py-2.5">
           <div>
-            <h1 className="text-sm font-semibold">{view === 'overview' ? 'Overview' : 'Activity'}</h1>
+            <h1 className="text-sm font-semibold">
+              {viewedApp ? viewedApp.name : view === 'activity' ? 'Activity' : 'Overview'}
+            </h1>
             <p className="text-[11px] text-muted-foreground">
-              {view === 'overview'
-                ? 'Monitor and control your local apps'
-                : 'Who did what, when, and why — across sessions, UI and system'}
+              {viewedApp
+                ? viewedApp.description || 'App details, processes and metrics'
+                : view === 'activity'
+                  ? 'Who did what, when, and why — across sessions, UI and system'
+                  : 'Monitor and control your local apps'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -126,7 +136,16 @@ function Dashboard() {
 
         <main className="min-h-0 flex-1 overflow-y-auto bg-muted/30 dark:bg-background">
           <div className="mx-auto flex max-w-6xl flex-col gap-4 p-5">
-            {view === 'overview' ? (
+            {viewedApp ? (
+              <AppView
+                app={viewedApp}
+                audit={audit}
+                onBack={() => setView('overview')}
+                onEdit={() => { setEditApp(viewedApp); setFormOpen(true) }}
+                onLogs={(proc) => dockRef.current?.open(viewedApp.name, proc)}
+                onChanged={refresh}
+              />
+            ) : view !== 'activity' ? (
               <>
                 <StatTiles apps={apps} />
                 <section className="flex min-w-0 flex-col gap-4">
@@ -143,6 +162,7 @@ function Dashboard() {
                           collapsed={collapsed.includes(app.name)}
                           onTogglePin={() => togglePin(app.name)}
                           onToggleCollapse={() => toggleCollapse(app.name)}
+                          onOpen={() => openApp(app.name)}
                           onLogs={(proc) => dockRef.current?.open(app.name, proc)}
                           onEdit={() => { setEditApp(app); setFormOpen(true) }}
                           onChanged={refresh}
@@ -174,7 +194,9 @@ function Dashboard() {
 export default function App() {
   return (
     <ThemeProvider>
-      <Dashboard />
+      <TooltipProvider delayDuration={200}>
+        <Dashboard />
+      </TooltipProvider>
     </ThemeProvider>
   )
 }

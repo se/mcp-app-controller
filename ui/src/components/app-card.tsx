@@ -3,9 +3,32 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { appActionWithTakeover, deleteApp, fmtUptime, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
 import { ChevronDown, ChevronRight, FileText, Lock, Pencil, Pin, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+function ProcTooltipContent({ p }: { p: ProcInfo }) {
+  return (
+    <div className="flex flex-col gap-0.5 text-xs">
+      <div className="font-semibold">{p.name}</div>
+      <div className="capitalize">
+        {p.status}
+        {p.status === 'running' && p.mode ? ` · ${p.mode} mode` : ''}
+        {p.health ? ` · ${p.health}` : ''}
+      </div>
+      {p.status === 'running' && (
+        <div>pid {p.pid} · up {fmtUptime(p.startedAt!)}</div>
+      )}
+      {p.metrics && <div>cpu {p.metrics.cpu}% · mem {p.metrics.memMb} MB</div>}
+      {p.status === 'crashed' && (
+        <div className="max-w-64 text-red-400">
+          exit {p.lastExit?.code ?? '?'}{p.lastExit?.summary ? ` — ${p.lastExit.summary}` : ''}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function StatusDot({ status, health }: { status: ProcInfo['status']; health: ProcInfo['health'] }) {
   const unhealthy = status === 'running' && health === 'unhealthy'
@@ -29,6 +52,7 @@ export function AppCard({
   collapsed,
   onTogglePin,
   onToggleCollapse,
+  onOpen,
   onLogs,
   onEdit,
   onChanged,
@@ -38,6 +62,7 @@ export function AppCard({
   collapsed: boolean
   onTogglePin: () => void
   onToggleCollapse: () => void
+  onOpen: () => void
   onLogs: (proc: string) => void
   onEdit: () => void
   onChanged: () => void
@@ -71,7 +96,13 @@ export function AppCard({
           </button>
           <div className="min-w-0">
             <div className="flex items-baseline gap-2">
-              <span className="text-base font-semibold">{app.name}</span>
+              <button
+                onClick={onOpen}
+                title="Open app view"
+                className="text-base font-semibold hover:underline"
+              >
+                {app.name}
+              </button>
               {pinned && <Pin className="size-3 shrink-0 self-center fill-current text-primary" />}
               {app.description && <span className="truncate text-xs text-muted-foreground">{app.description}</span>}
             </div>
@@ -114,7 +145,16 @@ export function AppCard({
         <div className="flex items-center gap-3 border-t px-5 py-2.5 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
             {app.processes.map((p) => (
-              <StatusDot key={p.name} status={p.status} health={p.health} />
+              <Tooltip key={p.name}>
+                <TooltipTrigger asChild>
+                  <span className="cursor-default">
+                    <StatusDot status={p.status} health={p.health} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <ProcTooltipContent p={p} />
+                </TooltipContent>
+              </Tooltip>
             ))}
           </div>
           {(() => {
@@ -177,7 +217,8 @@ export function AppCard({
                 className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
                 title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : undefined}
               >
-                {p.status === 'running' && `pid ${p.pid} · up ${fmtUptime(p.startedAt!)} · `}
+                {p.status === 'running' &&
+                  `pid ${p.pid} · up ${fmtUptime(p.startedAt!)}${p.metrics ? ` · ${p.metrics.cpu}% · ${p.metrics.memMb} MB` : ''} · `}
                 {p.status === 'crashed' && (
                   <span className="text-red-600 dark:text-red-400">
                     exit {p.lastExit?.code ?? '?'}{p.lastExit?.summary ? ` · ${p.lastExit.summary}` : ''} ·{' '}

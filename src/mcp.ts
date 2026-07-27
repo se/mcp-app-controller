@@ -56,6 +56,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         for (const p of app.processes) {
           let line = `  - ${p.name}: ${p.status}`;
           if (p.pid) line += ` (pid ${p.pid}, mode ${p.mode}, up since ${new Date(p.startedAt!).toISOString()})`;
+          if (p.metrics) line += ` [cpu ${p.metrics.cpu}%, mem ${p.metrics.memMb}MB]`;
           if (p.health) line += ` [${p.health}]`;
           if (p.status === 'crashed' && p.lastExit) {
             line += ` (exit code ${p.lastExit.code}${p.lastExit.summary ? ` — ${p.lastExit.summary}` : ''})`;

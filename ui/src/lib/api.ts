@@ -1,3 +1,9 @@
+export interface ProcMetrics {
+  cpu: number
+  memMb: number
+  at: number
+}
+
 export interface ProcInfo {
   name: string
   command: string
@@ -10,6 +16,7 @@ export interface ProcInfo {
   ownLogTimestamps: boolean
   ports: number[]
   health: 'healthy' | 'unhealthy' | 'unknown' | null
+  metrics: ProcMetrics | null
   status: 'running' | 'stopped' | 'crashed'
   pid?: number
   mode?: 'start' | 'dev'
@@ -77,6 +84,9 @@ export async function api<T = unknown>(path: string, opts?: RequestInit): Promis
 
 export const getState = () => api<{ apps: AppInfo[] }>('/state')
 export const getAudit = (limit = 60) => api<AuditEntry[]>(`/audit?limit=${limit}`)
+export const getMetricsHistory = (app: string, proc: string) =>
+  api<ProcMetrics[]>(`/apps/${encodeURIComponent(app)}/metrics/${encodeURIComponent(proc)}`)
+
 export const getLogs = (app: string, proc: string, lines = 300) =>
   api<{ logs: string }>(`/apps/${encodeURIComponent(app)}/logs/${encodeURIComponent(proc)}?lines=${lines}`)
 

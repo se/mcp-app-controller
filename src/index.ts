@@ -5,6 +5,7 @@ import { Store } from './db.js';
 import { ProcessManager } from './process-manager.js';
 import { Controller } from './controller.js';
 import { HealthMonitor } from './health.js';
+import { MetricsMonitor } from './metrics.js';
 import { captureShellEnv } from './env.js';
 import { restoreOnBoot } from './restore.js';
 import { createHttpServer } from './http.js';
@@ -23,6 +24,9 @@ const controller = new Controller(config, store, pm);
 const health = new HealthMonitor(config, pm);
 controller.health = health;
 health.start();
+const metrics = new MetricsMonitor(config, pm);
+controller.metrics = metrics;
+metrics.start();
 
 // Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
 // independent of the user's registered default shell.

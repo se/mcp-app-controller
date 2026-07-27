@@ -2,6 +2,7 @@ import type { ConfigStore, AppDef, ProcessDef } from './config.js';
 import type { Store, Lease } from './db.js';
 import type { ProcessManager, Mode, ProcState } from './process-manager.js';
 import { hasHealthCheck, type HealthMonitor } from './health.js';
+import type { MetricsMonitor } from './metrics.js';
 import { KeyedQueue } from './queue.js';
 
 export const ACTION_LEASE_MS = 5 * 60 * 1000;
@@ -29,6 +30,7 @@ export interface ProcResult {
 
 export class Controller {
   public health?: HealthMonitor;
+  public metrics?: MetricsMonitor;
   private queue = new KeyedQueue();
 
   constructor(
@@ -243,6 +245,7 @@ export class Controller {
           ownLogTimestamps: p.ownLogTimestamps,
           ports: p.ports,
           health: this.health?.getHealth(app.name, p.name) ?? null,
+          metrics: this.metrics?.latest.get(`${app.name}/${p.name}`) ?? null,
           ...this.pm.getState(app.name, p.name),
         })),
       })),

@@ -130,6 +130,10 @@ export function createHttpServer(controller: Controller) {
     res.json({ ok });
   });
 
+  api.get('/apps/:app/metrics/:proc', (req, res) => {
+    res.json(controller.metrics?.getHistory(req.params.app, req.params.proc) ?? []);
+  });
+
   api.get('/apps/:app/logs/:proc', (req, res) => {
     const lines = Math.min(Number(req.query.lines) || 200, 2000);
     try {
@@ -181,15 +185,18 @@ export function createHttpServer(controller: Controller) {
     const onState = () => send('state', null);
     const onLog = (payload: unknown) => send('log', payload);
     const onAudit = (payload: unknown) => send('audit', payload);
+    const onMetrics = (payload: unknown) => send('metrics', payload);
     bus.on('state', onState);
     bus.on('log', onLog);
     bus.on('audit', onAudit);
+    bus.on('metrics', onMetrics);
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
     req.on('close', () => {
       clearInterval(ping);
       bus.off('state', onState);
       bus.off('log', onLog);
       bus.off('audit', onAudit);
+      bus.off('metrics', onMetrics);
     });
   });
 
