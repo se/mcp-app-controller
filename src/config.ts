@@ -29,6 +29,10 @@ export const AppDefSchema = z.object({
 
 const ConfigFileSchema = z.object({
   apps: z.array(AppDefSchema).default([]),
+  // Shell whose LOGIN environment is captured at daemon startup and injected into
+  // every managed process (e.g. /opt/homebrew/bin/fish). Decouples app env from the
+  // user's registered default shell — works even if chsh was never run.
+  envShell: z.string().optional(),
 });
 
 export type ProcessDef = z.infer<typeof ProcessDefSchema>;
@@ -36,6 +40,8 @@ export type AppDef = z.infer<typeof AppDefSchema>;
 
 export class ConfigStore {
   apps: AppDef[] = [];
+  envShell?: string;
+  onReload?: () => void;
   private saving = false;
 
   constructor(public readonly filePath: string) {
@@ -50,6 +56,7 @@ export class ConfigStore {
     const raw = fs.readFileSync(this.filePath, 'utf8');
     const parsed = ConfigFileSchema.parse(YAML.parse(raw) ?? {});
     this.apps = parsed.apps;
+    this.envShell = parsed.envShell;
   }
 
   private watch(): void {
@@ -63,6 +70,7 @@ export class ConfigStore {
             this.load();
             bus.emit('state');
             console.log('[config] apps.yaml reloaded');
+            this.onReload?.();
           } catch (err) {
             console.error('[config] apps.yaml reload failed, keeping previous config:', err);
           }
@@ -76,7 +84,9 @@ export class ConfigStore {
   save(): void {
     this.saving = true;
     try {
-      fs.writeFileSync(this.filePath, YAML.stringify({ apps: this.apps }));
+      const doc: Record<string, unknown> = { apps: this.apps };
+      if (this.envShell) doc.envShell = this.envShell;
+      fs.writeFileSync(this.filePath, YAML.stringify(doc));
     } finally {
       setTimeout(() => (this.saving = false), 1000);
     }

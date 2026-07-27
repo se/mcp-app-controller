@@ -78,6 +78,8 @@ async function portHolder(port: number): Promise<{ pid: number; pgid: number; co
 export class ProcessManager {
   private runtime = new Map<string, RuntimeEntry>();
   private lastExit = new Map<string, { code: number | null; signal: string | null; at: number; summary?: string }>();
+  /** Environment captured from the configured envShell, injected into every managed process. */
+  baseEnv: Record<string, string> = {};
 
   constructor(private logsDir: string, private store: Store) {}
 
@@ -166,7 +168,7 @@ export class ProcessManager {
       shell: true,
       cwd,
       // Keep ANSI colors in logs; the web UI renders them, MCP output strips them
-      env: { ...process.env, ...procDef.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1' },
+      env: { ...process.env, ...this.baseEnv, ...procDef.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1' },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

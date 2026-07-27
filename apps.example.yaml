@@ -2,6 +2,12 @@
 # apps.yaml is hot-reloaded by the daemon and can also be managed from the
 # web UI or the MCP define_app tool.
 
+# Optional: shell whose LOGIN environment is captured at daemon startup and
+# injected into every managed process. Use this when your app env vars live in
+# a shell that is NOT your registered default shell (e.g. fish config on a
+# machine whose default shell is zsh).
+# envShell: /opt/homebrew/bin/fish
+
 apps:
   - name: my-web-app
     description: Example Next.js app

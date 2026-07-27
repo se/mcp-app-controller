@@ -5,6 +5,7 @@ import { Store } from './db.js';
 import { ProcessManager } from './process-manager.js';
 import { Controller } from './controller.js';
 import { HealthMonitor } from './health.js';
+import { captureShellEnv } from './env.js';
 import { restoreOnBoot } from './restore.js';
 import { createHttpServer } from './http.js';
 
@@ -23,15 +24,29 @@ const health = new HealthMonitor(config, pm);
 controller.health = health;
 health.start();
 
+// Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
+// independent of the user's registered default shell.
+async function refreshBaseEnv(): Promise<void> {
+  if (!config.envShell) return;
+  try {
+    pm.baseEnv = await captureShellEnv(config.envShell);
+    console.log(`[env] captured ${Object.keys(pm.baseEnv).length} variables from ${config.envShell} (login shell)`);
+  } catch (err: any) {
+    console.error(`[env] failed to capture environment from '${config.envShell}': ${err.message}`);
+  }
+}
+config.onReload = () => void refreshBaseEnv();
+
 const app = createHttpServer(controller);
 const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`app-controller daemon listening on http://127.0.0.1:${PORT}`);
   console.log(`  MCP endpoint : http://127.0.0.1:${PORT}/mcp`);
   console.log(`  Web UI       : http://127.0.0.1:${PORT}/`);
   console.log(`  Config       : ${path.join(ROOT, 'apps.yaml')}`);
-  if (process.env.APPCTRL_NO_RESTORE !== '1') {
-    setTimeout(() => void restoreOnBoot(controller), 1000);
-  }
+  setTimeout(async () => {
+    await refreshBaseEnv(); // env must be ready before restored processes spawn
+    if (process.env.APPCTRL_NO_RESTORE !== '1') await restoreOnBoot(controller);
+  }, 500);
 });
 
 let shuttingDown = false;

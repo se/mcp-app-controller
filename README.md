@@ -83,6 +83,22 @@ after `npm run build` deploys daemon changes, or after changing your shell env. 
 goes to `data/daemon.log`. Note: `launchctl bootstrap` occasionally fails transiently right
 after a bootout — just re-run the script.
 
+### App environment (`envShell`)
+
+Managed apps need your environment variables, but *which shell loads them* is a classic trap:
+launchd knows only your **registered** default shell (`chsh`), and zsh/bash don't read their
+interactive rc files (`~/.zshrc`) in non-interactive login mode. If your env lives in, say,
+fish config while the machine's default shell is zsh, set it explicitly in `apps.yaml`:
+
+```yaml
+envShell: /opt/homebrew/bin/fish
+```
+
+At startup (and on config reload) the daemon runs `<envShell> -l -c env`, captures everything
+that shell's login config exports, and injects it into every managed process — regardless of
+what launchd or `chsh` say. The daemon log prints how many variables were captured. Per-process
+`env:` entries in `apps.yaml` still override captured values.
+
 ### Health checks
 
 A process definition can declare `healthUrl` (HTTP GET, any response < 500 = healthy) or
