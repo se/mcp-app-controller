@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { profileAction, type AppInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { History, LayoutDashboard, Layers, Play, Plus, Settings2, Square } from 'lucide-react'
+import { History, LayoutDashboard, Layers, Play, Plus, Square } from 'lucide-react'
 
 export type View = 'overview' | 'activity' | `app:${string}`
 
@@ -31,9 +31,7 @@ export function Sidebar({
   return (
     <aside className="hidden w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
       <div className="flex items-center gap-2 border-b px-4 py-3.5">
-        <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Settings2 className="size-4" />
-        </div>
+        <img src="/logo.svg" alt="App Controller" className="size-7" />
         <div className="leading-tight">
           <div className="text-sm font-semibold">App Controller</div>
           <div className="text-[10px] text-muted-foreground">local process manager</div>

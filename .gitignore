@@ -4,8 +4,8 @@ data/
 
 # Dependencies & build output
 node_modules/
-dist/
-public/
+/dist/
+/public/
 
 # Misc
 *.log

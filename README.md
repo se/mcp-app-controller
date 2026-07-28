@@ -1,3 +1,5 @@
+<p align="center"><img src="ui/public/logo.svg" width="88" alt="App Controller logo"></p>
+
 # mcp-app-controller
 
 Central daemon that owns and manages your local app processes, exposed to Claude Code sessions
