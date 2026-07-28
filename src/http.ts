@@ -1,5 +1,6 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -117,6 +118,85 @@ export function createHttpServer(controller: Controller) {
     const { process: proc, mode, reason = 'manual restart from UI', waitReady = false, takeover = false } = req.body ?? {};
     const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);
     res.json(r);
+  });
+
+  api.get('/settings', (_req, res) => {
+    res.json({
+      envShell: controller.config.envShell ?? '',
+      notify: controller.config.notify,
+      profiles: controller.config.profiles,
+      envVarCount: Object.keys(controller.pm.baseEnv).length,
+    });
+  });
+
+  api.put('/settings', (req, res) => {
+    const { envShell, notify } = req.body ?? {};
+    const shell = typeof envShell === 'string' ? envShell.trim() : '';
+    if (shell && !fs.existsSync(shell)) {
+      res.status(400).json({ error: `Shell not found at '${shell}' — use an absolute path (e.g. /opt/homebrew/bin/fish)` });
+      return;
+    }
+    controller.config.envShell = shell || undefined;
+    if (notify && typeof notify === 'object') {
+      controller.config.notify = {
+        macos: notify.macos !== false,
+        slackWebhook: typeof notify.slackWebhook === 'string' && notify.slackWebhook.trim() ? notify.slackWebhook.trim() : undefined,
+      };
+    }
+    controller.config.save();
+    controller.config.onReload?.(); // re-capture environment with the new shell
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'settings-updated', app: '*',
+      detail: `envShell=${shell || '(none)'}, notify.macos=${controller.config.notify.macos}, slack=${controller.config.notify.slackWebhook ? 'set' : 'off'}`,
+      result: 'saved',
+    });
+    res.json({ ok: true });
+  });
+
+  api.put('/profiles/:name', (req, res) => {
+    const name = req.params.name.trim();
+    const targets: unknown = req.body?.targets;
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+      res.status(400).json({ error: 'Profile name: letters, digits, dot, dash, underscore only' });
+      return;
+    }
+    if (!Array.isArray(targets) || targets.length === 0 || !targets.every((t) => typeof t === 'string')) {
+      res.status(400).json({ error: 'targets must be a non-empty array of "app" or "app/process" strings' });
+      return;
+    }
+    for (const t of targets as string[]) {
+      const [app, proc] = t.split('/');
+      const appDef = controller.config.getApp(app);
+      if (!appDef) {
+        res.status(400).json({ error: `Unknown app '${app}' in target '${t}'` });
+        return;
+      }
+      if (proc && !appDef.processes.some((p) => p.name === proc)) {
+        res.status(400).json({ error: `App '${app}' has no process '${proc}' (target '${t}')` });
+        return;
+      }
+    }
+    controller.config.profiles[name] = targets as string[];
+    controller.config.save();
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'profile-saved', app: '*',
+      detail: `${name} → [${(targets as string[]).join(', ')}]`, result: 'saved',
+    });
+    res.json({ ok: true });
+  });
+
+  api.delete('/profiles/:name', (req, res) => {
+    if (!(req.params.name in controller.config.profiles)) {
+      res.status(404).json({ error: 'Profile not found' });
+      return;
+    }
+    delete controller.config.profiles[req.params.name];
+    controller.config.save();
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'profile-removed', app: '*',
+      detail: req.params.name, result: 'removed',
+    });
+    res.json({ ok: true });
   });
 
   api.post('/profiles/:name/:action(start|stop)', async (req, res) => {

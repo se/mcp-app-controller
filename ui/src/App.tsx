@@ -9,6 +9,7 @@ import { AppCard } from '@/components/app-card'
 import { AppView } from '@/components/app-view'
 import { CommandPalette } from '@/components/command-palette'
 import { ActivityPage } from '@/components/activity-page'
+import { SettingsPage } from '@/components/settings-page'
 import { LogDock, type LogDockHandle } from '@/components/log-dock'
 import { AppFormDialog } from '@/components/app-form-dialog'
 import { Sidebar, type View } from '@/components/sidebar'
@@ -110,14 +111,16 @@ function Dashboard() {
         <header className="flex shrink-0 items-center justify-between border-b bg-background px-5 py-2.5">
           <div>
             <h1 className="text-sm font-semibold">
-              {viewedApp ? viewedApp.name : view === 'activity' ? 'Activity' : 'Overview'}
+              {viewedApp ? viewedApp.name : view === 'activity' ? 'Activity' : view === 'settings' ? 'Settings' : 'Overview'}
             </h1>
             <p className="text-[11px] text-muted-foreground">
               {viewedApp
                 ? viewedApp.description || 'App details, processes and metrics'
                 : view === 'activity'
                   ? 'Who did what, when, and why — across sessions, UI and system'
-                  : 'Monitor and control your local apps'}
+                  : view === 'settings'
+                    ? 'Environment, notifications and profiles'
+                    : 'Monitor and control your local apps'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -148,6 +151,8 @@ function Dashboard() {
                 onLogs={(proc) => dockRef.current?.open(viewedApp.name, proc)}
                 onChanged={refresh}
               />
+            ) : view === 'settings' ? (
+              <SettingsPage apps={apps} onChanged={refresh} />
             ) : view !== 'activity' ? (
               <>
                 <StatTiles apps={apps} />

@@ -88,6 +88,21 @@ export const getState = () => api<{ apps: AppInfo[]; profiles: Record<string, st
 
 export const profileAction = (name: string, action: 'start' | 'stop') =>
   api(`/profiles/${encodeURIComponent(name)}/${action}`, { method: 'POST', body: '{}' })
+
+export interface Settings {
+  envShell: string
+  notify: { macos: boolean; slackWebhook?: string }
+  profiles: Record<string, string[]>
+  envVarCount: number
+}
+
+export const getSettings = () => api<Settings>('/settings')
+export const saveSettings = (s: { envShell: string; notify: { macos: boolean; slackWebhook?: string } }) =>
+  api('/settings', { method: 'PUT', body: JSON.stringify(s) })
+export const saveProfile = (name: string, targets: string[]) =>
+  api(`/profiles/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ targets }) })
+export const deleteProfile = (name: string) =>
+  api(`/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
 export const getAudit = (limit = 60) => api<AuditEntry[]>(`/audit?limit=${limit}`)
 export const getMetricsHistory = (app: string, proc: string) =>
   api<ProcMetrics[]>(`/apps/${encodeURIComponent(app)}/metrics/${encodeURIComponent(proc)}`)

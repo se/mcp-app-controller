@@ -100,7 +100,8 @@ envShell: /opt/homebrew/bin/fish
 
 At startup (and on config reload) the daemon runs `<envShell> -l -c env`, captures everything
 that shell's login config exports, and injects it into every managed process — regardless of
-what launchd or `chsh` say. The daemon log prints how many variables were captured. Per-process
+what launchd or `chsh` say. Configurable from the dashboard's **Settings** page (which also
+shows how many variables were captured), along with crash notifications and profiles. The daemon log prints how many variables were captured. Per-process
 `env:` entries in `apps.yaml` still override captured values.
 
 ### Health checks

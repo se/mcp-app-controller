@@ -1,9 +1,9 @@
 import { Button } from '@/components/ui/button'
 import { profileAction, type AppInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { History, LayoutDashboard, Layers, Play, Plus, Square } from 'lucide-react'
+import { History, LayoutDashboard, Layers, Play, Plus, Settings, Square } from 'lucide-react'
 
-export type View = 'overview' | 'activity' | `app:${string}`
+export type View = 'overview' | 'activity' | 'settings' | `app:${string}`
 
 function appDotClass(app: AppInfo): string {
   const procs = app.processes
@@ -59,6 +59,15 @@ export function Sidebar({
           )}
         >
           <History className="size-4" /> Activity
+        </button>
+        <button
+          onClick={() => onNavigate('settings')}
+          className={cn(
+            'mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+            view === 'settings' ? 'bg-accent font-medium' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+          )}
+        >
+          <Settings className="size-4" /> Settings
         </button>
 
         <div className="px-2 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
