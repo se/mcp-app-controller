@@ -151,6 +151,21 @@ are awaited until healthy (or running, if no health check) before the dependent 
 Whole-app starts follow topological order. `profiles:` in apps.yaml names groups of targets
 ("app" or "app/process") startable/stoppable in one action from the sidebar or MCP.
 
+### Triggers & alarms
+
+`triggers:` in apps.yaml (or the Settings page, or the MCP `define_trigger` tool) watch every
+log line with a regex; matches fire **alarms** — shown behind the header bell with a severity
+badge, optionally notified (macOS/Slack), throttled per trigger. Clicking an alarm opens the
+process's log panel and jumps to the exact matching line (searching rotated files too).
+Agents can check `list_alarms` and leave persistent watches with `define_trigger`.
+
+### Environment layers
+
+Per app: `env:` (app-wide), `environments:` (named sets like dev/test/staging/prod) with an
+`activeEnvironment`, plus per-process `env:`. Merge order: captured shell env → app-wide →
+active set → process. All editable from the App View's Environment card; switch sets from the
+UI or the MCP `set_environment` tool (restart applies them).
+
 ### Notifications & log rotation
 
 Crashes trigger a macOS notification (and an optional Slack webhook via

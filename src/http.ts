@@ -125,6 +125,7 @@ export function createHttpServer(controller: Controller) {
       envShell: controller.config.envShell ?? '',
       notify: controller.config.notify,
       profiles: controller.config.profiles,
+      triggers: controller.config.triggers,
       envVarCount: Object.keys(controller.pm.baseEnv).length,
     });
   });
@@ -235,7 +236,137 @@ export function createHttpServer(controller: Controller) {
   api.get('/apps/:app/logs/:proc', (req, res) => {
     const lines = Math.min(Number(req.query.lines) || 200, 2000);
     try {
+      if (typeof req.query.around === 'string' && req.query.around) {
+        res.json({ logs: controller.pm.readLogsAround(req.params.app, req.params.proc, req.query.around, 250) });
+        return;
+      }
       res.json({ logs: controller.pm.readLogs(req.params.app, req.params.proc, lines) });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---------- Alarms & triggers ----------
+  api.get('/alarms', (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    res.json(controller.store.listAlarms(limit, req.query.active === '1'));
+  });
+  api.post('/alarms/:id/ack', (req, res) => {
+    res.json({ acked: controller.store.ackAlarm(Number(req.params.id)) });
+  });
+  api.post('/alarms/ack-all', (_req, res) => {
+    res.json({ acked: controller.store.ackAlarm() });
+  });
+  api.delete('/alarms', (_req, res) => {
+    res.json({ removed: controller.store.clearAlarms() });
+  });
+
+  api.put('/triggers/:name', (req, res) => {
+    const name = req.params.name.trim();
+    const { target = '*', pattern, severity = 'warning', notify = true, cooldownSeconds = 60 } = req.body ?? {};
+    if (!/^[a-zA-Z0-9._ -]+$/.test(name)) {
+      res.status(400).json({ error: 'Trigger name: letters, digits, space, dot, dash, underscore only' });
+      return;
+    }
+    if (typeof pattern !== 'string' || !pattern) {
+      res.status(400).json({ error: 'pattern is required' });
+      return;
+    }
+    try {
+      new RegExp(pattern, 'i');
+    } catch (err: any) {
+      res.status(400).json({ error: `Invalid regex: ${err.message}` });
+      return;
+    }
+    if (target !== '*') {
+      const [app, proc] = String(target).split('/');
+      const appDef = controller.config.getApp(app);
+      if (!appDef) {
+        res.status(400).json({ error: `Unknown app '${app}' in target` });
+        return;
+      }
+      if (proc && !appDef.processes.some((p) => p.name === proc)) {
+        res.status(400).json({ error: `App '${app}' has no process '${proc}'` });
+        return;
+      }
+    }
+    if (!['info', 'warning', 'critical'].includes(severity)) {
+      res.status(400).json({ error: 'severity must be info | warning | critical' });
+      return;
+    }
+    const trigger = { name, target: String(target), pattern, severity, notify: notify !== false, cooldownSeconds: Math.max(0, Number(cooldownSeconds) || 0) };
+    const idx = controller.config.triggers.findIndex((t) => t.name === name);
+    if (idx >= 0) controller.config.triggers[idx] = trigger;
+    else controller.config.triggers.push(trigger);
+    controller.config.save();
+    controller.config.onReload?.();
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'trigger-saved', app: '*',
+      detail: `${name}: /${pattern}/i on ${trigger.target} (${severity})`, result: 'saved',
+    });
+    res.json({ ok: true });
+  });
+
+  api.delete('/triggers/:name', (req, res) => {
+    const before = controller.config.triggers.length;
+    controller.config.triggers = controller.config.triggers.filter((t) => t.name !== req.params.name);
+    if (controller.config.triggers.length === before) {
+      res.status(404).json({ error: 'Trigger not found' });
+      return;
+    }
+    controller.config.save();
+    controller.config.onReload?.();
+    controller.store.audit({
+      session: 'ui', source: 'ui', action: 'trigger-removed', app: '*', detail: req.params.name, result: 'removed',
+    });
+    res.json({ ok: true });
+  });
+
+  // ---------- App environment layers ----------
+  api.put('/apps/:app/env', (req, res) => {
+    try {
+      const appDef = controller.requireApp(req.params.app);
+      const { env, environments, activeEnvironment, processEnv } = req.body ?? {};
+      const rec = (v: unknown): Record<string, string> | null =>
+        v && typeof v === 'object' && Object.values(v as object).every((x) => typeof x === 'string')
+          ? (v as Record<string, string>)
+          : null;
+      if (env !== undefined) {
+        const r = rec(env);
+        if (!r) throw new Error('env must be a string map');
+        appDef.env = r;
+      }
+      if (environments !== undefined) {
+        if (!environments || typeof environments !== 'object') throw new Error('environments must be a map of string maps');
+        const out: Record<string, Record<string, string>> = {};
+        for (const [k, v] of Object.entries(environments as object)) {
+          const r = rec(v);
+          if (!r) throw new Error(`environment '${k}' must be a string map`);
+          out[k] = r;
+        }
+        appDef.environments = out;
+      }
+      if (activeEnvironment !== undefined) {
+        const active = typeof activeEnvironment === 'string' && activeEnvironment ? activeEnvironment : undefined;
+        if (active && !(active in appDef.environments)) throw new Error(`environment '${active}' is not defined`);
+        appDef.activeEnvironment = active;
+      }
+      if (processEnv !== undefined && processEnv && typeof processEnv === 'object') {
+        for (const [procName, v] of Object.entries(processEnv as object)) {
+          const p = appDef.processes.find((x) => x.name === procName);
+          if (!p) throw new Error(`Unknown process '${procName}'`);
+          const r = rec(v);
+          if (!r) throw new Error(`processEnv['${procName}'] must be a string map`);
+          p.env = r;
+        }
+      }
+      controller.config.save();
+      controller.store.audit({
+        session: 'ui', source: 'ui', action: 'env-updated', app: req.params.app,
+        detail: `activeEnvironment=${appDef.activeEnvironment ?? '(none)'}; envs=[${Object.keys(appDef.environments).join(', ')}]`,
+        result: 'saved',
+      });
+      res.json({ ok: true, restartRequired: true });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -284,10 +415,12 @@ export function createHttpServer(controller: Controller) {
     const onLog = (payload: unknown) => send('log', payload);
     const onAudit = (payload: unknown) => send('audit', payload);
     const onMetrics = (payload: unknown) => send('metrics', payload);
+    const onAlarm = (payload: unknown) => send('alarm', payload);
     bus.on('state', onState);
     bus.on('log', onLog);
     bus.on('audit', onAudit);
     bus.on('metrics', onMetrics);
+    bus.on('alarm', onAlarm);
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
     req.on('close', () => {
       clearInterval(ping);
@@ -295,6 +428,7 @@ export function createHttpServer(controller: Controller) {
       bus.off('log', onLog);
       bus.off('audit', onAudit);
       bus.off('metrics', onMetrics);
+      bus.off('alarm', onAlarm);
     });
   });
 

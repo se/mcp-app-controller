@@ -14,6 +14,17 @@ export interface AuditEntry {
   result: string;
 }
 
+export interface AlarmEntry {
+  id?: number;
+  ts: number;
+  trigger_name: string;
+  severity: string;
+  app: string;
+  proc: string;
+  line: string;
+  acked: number;
+}
+
 export interface Lease {
   app: string;
   session: string;
@@ -48,6 +59,17 @@ export class Store {
         acquired_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS alarms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        trigger_name TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        app TEXT NOT NULL,
+        proc TEXT NOT NULL,
+        line TEXT NOT NULL,
+        acked INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_alarms_ts ON alarms(ts DESC);
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -125,6 +147,32 @@ export class Store {
       .run(lease);
     bus.emit('state');
     return lease;
+  }
+
+  addAlarm(a: { trigger: string; severity: string; app: string; proc: string; line: string }): AlarmEntry {
+    const entry: AlarmEntry = { ts: Date.now(), trigger_name: a.trigger, severity: a.severity, app: a.app, proc: a.proc, line: a.line, acked: 0 };
+    const info = this.db
+      .prepare(`INSERT INTO alarms (ts, trigger_name, severity, app, proc, line, acked) VALUES (@ts, @trigger_name, @severity, @app, @proc, @line, 0)`)
+      .run(entry);
+    entry.id = Number(info.lastInsertRowid);
+    return entry;
+  }
+
+  listAlarms(limit = 100, activeOnly = false): AlarmEntry[] {
+    return this.db
+      .prepare(`SELECT * FROM alarms ${activeOnly ? 'WHERE acked = 0' : ''} ORDER BY ts DESC LIMIT ?`)
+      .all(limit) as AlarmEntry[];
+  }
+
+  ackAlarm(id?: number): number {
+    const res = id != null
+      ? this.db.prepare(`UPDATE alarms SET acked = 1 WHERE id = ?`).run(id)
+      : this.db.prepare(`UPDATE alarms SET acked = 1 WHERE acked = 0`).run();
+    return res.changes;
+  }
+
+  clearAlarms(): number {
+    return this.db.prepare(`DELETE FROM alarms`).run().changes;
   }
 
   setKv(key: string, value: string): void {

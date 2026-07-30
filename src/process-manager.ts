@@ -192,8 +192,16 @@ export class ProcessManager {
     const child = spawn(command, {
       shell: true,
       cwd,
-      // Keep ANSI colors in logs; the web UI renders them, MCP output strips them
-      env: { ...process.env, ...this.baseEnv, ...procDef.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1' },
+      // Layering: daemon env < captured shell env < app-wide env < active environment < process env
+      env: {
+        ...process.env,
+        ...this.baseEnv,
+        ...appDef.env,
+        ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
+        ...procDef.env,
+        FORCE_COLOR: '1',
+        CLICOLOR_FORCE: '1',
+      },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -341,6 +349,33 @@ export class ProcessManager {
     } catch {
       // best effort
     }
+  }
+
+  /**
+   * Find the log region around a timestamped line (searches current + rotated file).
+   * Returns up to `context` lines before/after the line whose prefix matches `[ts]`.
+   */
+  readLogsAround(app: string, proc: string, ts: string, context = 250): string {
+    const file = this.logFile(app, proc);
+    for (const f of [file, `${file}.1`]) {
+      if (!fs.existsSync(f)) continue;
+      const stat = fs.statSync(f);
+      const readBytes = Math.min(stat.size, 5 * 1024 * 1024);
+      const fd = fs.openSync(f, 'r');
+      let all: string[];
+      try {
+        const buf = Buffer.alloc(readBytes);
+        fs.readSync(fd, buf, 0, readBytes, stat.size - readBytes);
+        all = buf.toString('utf8').split('\n');
+      } finally {
+        fs.closeSync(fd);
+      }
+      const idx = all.findIndex((l) => l.startsWith(`[${ts}]`));
+      if (idx >= 0) {
+        return all.slice(Math.max(0, idx - context), idx + context).join('\n');
+      }
+    }
+    return '';
   }
 
   readLogs(app: string, proc: string, lines = 100, stripAnsi = false): string {

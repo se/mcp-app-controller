@@ -37,8 +37,31 @@ export interface AppInfo {
   name: string
   description: string
   cwd: string
+  env: Record<string, string>
+  environments: Record<string, Record<string, string>>
+  activeEnvironment: string | null
   lease: Lease | null
   processes: ProcInfo[]
+}
+
+export interface Alarm {
+  id: number
+  ts: number
+  trigger_name: string
+  severity: 'info' | 'warning' | 'critical'
+  app: string
+  proc: string
+  line: string
+  acked: number
+}
+
+export interface Trigger {
+  name: string
+  target: string
+  pattern: string
+  severity: 'info' | 'warning' | 'critical'
+  notify: boolean
+  cooldownSeconds: number
 }
 
 export interface AuditEntry {
@@ -93,8 +116,29 @@ export interface Settings {
   envShell: string
   notify: { macos: boolean; slackWebhook?: string }
   profiles: Record<string, string[]>
+  triggers: Trigger[]
   envVarCount: number
 }
+
+export const getAlarms = (activeOnly = true, limit = 100) =>
+  api<Alarm[]>(`/alarms?limit=${limit}${activeOnly ? '&active=1' : ''}`)
+export const ackAlarm = (id: number) => api(`/alarms/${id}/ack`, { method: 'POST', body: '{}' })
+export const ackAllAlarms = () => api('/alarms/ack-all', { method: 'POST', body: '{}' })
+export const saveTrigger = (t: Trigger) =>
+  api(`/triggers/${encodeURIComponent(t.name)}`, { method: 'PUT', body: JSON.stringify(t) })
+export const deleteTrigger = (name: string) =>
+  api(`/triggers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+export const saveAppEnv = (
+  app: string,
+  payload: {
+    env?: Record<string, string>
+    environments?: Record<string, Record<string, string>>
+    activeEnvironment?: string
+    processEnv?: Record<string, Record<string, string>>
+  }
+) => api(`/apps/${encodeURIComponent(app)}/env`, { method: 'PUT', body: JSON.stringify(payload) })
+export const getLogsAround = (app: string, proc: string, ts: string) =>
+  api<{ logs: string }>(`/apps/${encodeURIComponent(app)}/logs/${encodeURIComponent(proc)}?around=${encodeURIComponent(ts)}`)
 
 export const getSettings = () => api<Settings>('/settings')
 export const saveSettings = (s: { envShell: string; notify: { macos: boolean; slackWebhook?: string } }) =>

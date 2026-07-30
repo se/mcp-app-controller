@@ -22,6 +22,7 @@ import {
   type ProcMetrics,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { EnvCard } from '@/components/env-editor'
 import { Activity, ArrowLeft, Cpu, FileText, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
@@ -142,6 +143,11 @@ export function AppView({
           <div className="min-w-0">
             <div className="flex items-baseline gap-2">
               <h2 className="text-lg font-semibold">{app.name}</h2>
+              {app.activeEnvironment && (
+                <Badge variant="outline" className="border-violet-500/50 text-[10px] uppercase text-violet-600 dark:text-violet-400">
+                  {app.activeEnvironment}
+                </Badge>
+              )}
               {app.description && <span className="truncate text-xs text-muted-foreground">{app.description}</span>}
             </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">{app.cwd}</div>
@@ -281,6 +287,8 @@ export function AppView({
           </TableBody>
         </Table>
       </Card>
+
+      <EnvCard app={app} onChanged={onChanged} />
 
       <Card className="gap-0 overflow-hidden py-0">
         <div className="border-b px-4 py-2.5 text-sm font-medium">Configuration</div>

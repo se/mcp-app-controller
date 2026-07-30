@@ -5,14 +5,102 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   deleteProfile,
+  deleteTrigger,
   getSettings,
   saveProfile,
   saveSettings,
+  saveTrigger,
   type AppInfo,
   type Settings,
+  type Trigger,
 } from '@/lib/api'
 import { Check, Plus, Trash2 } from 'lucide-react'
+
+const emptyTrigger: Trigger = { name: '', target: '*', pattern: '', severity: 'warning', notify: true, cooldownSeconds: 60 }
+
+function TriggerRow({
+  trigger,
+  isNew,
+  onSaved,
+  onDeleted,
+}: {
+  trigger: Trigger
+  isNew?: boolean
+  onSaved: () => void
+  onDeleted?: () => void
+}) {
+  const [t, setT] = useState<Trigger>(trigger)
+  const patternValid = (() => {
+    if (!t.pattern) return true
+    try { new RegExp(t.pattern, 'i'); return true } catch { return false }
+  })()
+  const set = (patch: Partial<Trigger>) => setT((prev) => ({ ...prev, ...patch }))
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input value={t.name} onChange={(e) => set({ name: e.target.value })} disabled={!isNew}
+          placeholder="trigger name" className="h-8 w-40 text-xs" />
+        <Input value={t.target} onChange={(e) => set({ target: e.target.value })}
+          placeholder='* | app | app/process' className="h-8 w-40 font-mono text-xs" />
+        <Input value={t.pattern} onChange={(e) => set({ pattern: e.target.value })}
+          placeholder="regex, e.g. error|ECONNREFUSED"
+          className={`h-8 min-w-52 flex-1 font-mono text-xs ${patternValid ? '' : 'border-red-500/70'}`} />
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Select value={t.severity} onValueChange={(v) => set({ severity: v as Trigger['severity'] })}>
+          <SelectTrigger size="sm" className="w-28 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="info">info</SelectItem>
+            <SelectItem value="warning">warning</SelectItem>
+            <SelectItem value="critical">critical</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1.5">
+          <Switch checked={t.notify} onCheckedChange={(v) => set({ notify: v })} />
+          <Label className="text-[11px] text-muted-foreground">notify</Label>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Label className="text-[11px] text-muted-foreground">cooldown (s)</Label>
+          <Input value={String(t.cooldownSeconds)} inputMode="numeric"
+            onChange={(e) => set({ cooldownSeconds: Number(e.target.value) || 0 })}
+            className="h-8 w-20 text-xs" />
+        </div>
+        <div className="ml-auto flex gap-1.5">
+          <Button variant="outline" size="sm" className="h-8 text-xs"
+            disabled={!t.name.trim() || !t.pattern || !patternValid}
+            onClick={async () => {
+              try {
+                await saveTrigger({ ...t, name: t.name.trim() })
+                if (isNew) setT(emptyTrigger)
+                onSaved()
+              } catch (err) { alert((err as Error).message) }
+            }}>
+            {isNew ? <><Plus className="size-3.5" /> Add</> : 'Save'}
+          </Button>
+          {!isNew && onDeleted && (
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-red-500" title="Delete trigger"
+              onClick={async () => {
+                if (!confirm(`Delete trigger '${t.name}'?`)) return
+                await deleteTrigger(t.name)
+                onDeleted()
+              }}>
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function SettingsPage({ apps, onChanged }: { apps: AppInfo[]; onChanged: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -116,6 +204,31 @@ export function SettingsPage({ apps, onChanged }: { apps: AppInfo[]; onChanged: 
             <Button size="sm" onClick={submitSettings}>
               <Check className="size-3.5" /> Save environment & notifications
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="gap-0 py-0">
+        <CardHeader className="border-b px-5 py-3">
+          <div className="text-sm font-medium">Triggers</div>
+          <p className="text-[11px] text-muted-foreground">
+            Fire an alarm (header bell{' + '}optional notification) whenever a log line matches a
+            regex. Target: <span className="font-mono">*</span>, <span className="font-mono">app</span> or{' '}
+            <span className="font-mono">app/process</span>. Alarms link back to the matching log line.
+          </p>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 px-5 py-4">
+          {settings.triggers.length === 0 && (
+            <div className="text-xs text-muted-foreground">No triggers yet — add one below.</div>
+          )}
+          {settings.triggers.map((t) => (
+            <TriggerRow key={t.name} trigger={t}
+              onSaved={() => { flash(`Trigger saved.`); load() }}
+              onDeleted={() => { flash(`Trigger removed.`); load() }} />
+          ))}
+          <div className="border-t pt-3">
+            <TriggerRow trigger={emptyTrigger} isNew
+              onSaved={() => { flash('Trigger added.'); load() }} />
           </div>
         </CardContent>
       </Card>

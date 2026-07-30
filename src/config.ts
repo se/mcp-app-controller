@@ -28,6 +28,12 @@ export const AppDefSchema = z
     name: z.string().min(1),
     description: z.string().default(''),
     cwd: z.string().min(1),
+    // App-wide env vars, applied to every process (process env overrides these)
+    env: z.record(z.string()).default({}),
+    // Named environment sets (dev/test/staging/prod ...); the active one is layered
+    // between app-wide env and process env
+    environments: z.record(z.record(z.string())).default({}),
+    activeEnvironment: z.string().optional(),
     processes: z.array(ProcessDefSchema).min(1),
   })
   .superRefine((app, ctx) => {
@@ -38,7 +44,20 @@ export const AppDefSchema = z
         else if (!names.has(d)) ctx.addIssue({ code: 'custom', message: `process '${p.name}' dependsOn unknown process '${d}'` });
       }
     }
+    if (app.activeEnvironment && !(app.activeEnvironment in app.environments)) {
+      ctx.addIssue({ code: 'custom', message: `activeEnvironment '${app.activeEnvironment}' is not defined in environments` });
+    }
   });
+
+export const TriggerSchema = z.object({
+  name: z.string().min(1),
+  target: z.string().min(1), // "*" | "app" | "app/process"
+  pattern: z.string().min(1), // case-insensitive regex tested against each log line
+  severity: z.enum(['info', 'warning', 'critical']).default('warning'),
+  notify: z.boolean().default(true),
+  cooldownSeconds: z.number().int().min(0).default(60),
+});
+export type Trigger = z.infer<typeof TriggerSchema>;
 
 const ConfigFileSchema = z.object({
   apps: z.array(AppDefSchema).default([]),
@@ -55,6 +74,8 @@ const ConfigFileSchema = z.object({
     .default({ macos: true }),
   // Named groups of targets ("app" or "app/process") for one-shot start/stop
   profiles: z.record(z.array(z.string())).default({}),
+  // Log triggers: fire alarms (and notifications) when a log line matches
+  triggers: z.array(TriggerSchema).default([]),
 });
 
 export type ProcessDef = z.infer<typeof ProcessDefSchema>;
@@ -65,6 +86,7 @@ export class ConfigStore {
   envShell?: string;
   notify: { macos: boolean; slackWebhook?: string } = { macos: true };
   profiles: Record<string, string[]> = {};
+  triggers: Trigger[] = [];
   onReload?: () => void;
   private saving = false;
 
@@ -83,6 +105,7 @@ export class ConfigStore {
     this.envShell = parsed.envShell;
     this.notify = parsed.notify;
     this.profiles = parsed.profiles;
+    this.triggers = parsed.triggers;
   }
 
   private watch(): void {
@@ -113,6 +136,7 @@ export class ConfigStore {
       const doc: Record<string, unknown> = { apps: this.apps };
       if (this.envShell) doc.envShell = this.envShell;
       if (Object.keys(this.profiles).length > 0) doc.profiles = this.profiles;
+      if (this.triggers.length > 0) doc.triggers = this.triggers;
       if (!this.notify.macos || this.notify.slackWebhook) doc.notify = this.notify;
       fs.writeFileSync(this.filePath, YAML.stringify(doc));
     } finally {

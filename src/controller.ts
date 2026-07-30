@@ -345,6 +345,9 @@ export class Controller {
         name: app.name,
         description: app.description,
         cwd: app.cwd,
+        env: app.env,
+        environments: app.environments,
+        activeEnvironment: app.activeEnvironment ?? null,
         lease: leases.find((l) => l.app === app.name) ?? null,
         processes: app.processes.map((p) => ({
           name: p.name,

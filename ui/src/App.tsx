@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { getAudit, getState, loadPref, savePref, type AppInfo, type AuditEntry } from '@/lib/api'
-import { logBus, stateBus } from '@/lib/log-bus'
+import { alarmsBus, anchorBus, logBus, stateBus } from '@/lib/log-bus'
 import { ThemeProvider } from '@/lib/theme'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppCard } from '@/components/app-card'
 import { AppView } from '@/components/app-view'
+import { AlarmsBell } from '@/components/alarms-bell'
 import { CommandPalette } from '@/components/command-palette'
 import { ActivityPage } from '@/components/activity-page'
 import { SettingsPage } from '@/components/settings-page'
@@ -74,6 +75,7 @@ function Dashboard() {
         if (type === 'state') getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }).catch(() => {})
         if (type === 'audit') getAudit().then(setAudit).catch(() => {})
         if (type === 'log') logBus.emit(data)
+        if (type === 'alarm') alarmsBus.emit()
         if (type === 'metrics') {
           setApps((prev) =>
             prev.map((a) => ({
@@ -124,6 +126,12 @@ function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <AlarmsBell
+              onOpenLog={(app, proc, ts) => {
+                dockRef.current?.open(app, proc)
+                if (ts) anchorBus.emit({ app, proc, ts })
+              }}
+            />
             <Badge
               variant="outline"
               className={connected

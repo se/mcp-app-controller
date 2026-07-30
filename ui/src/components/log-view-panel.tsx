@@ -5,8 +5,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { appActionWithTakeover, getLogs, getState, type ProcInfo } from '@/lib/api'
-import { logBus, stateBus } from '@/lib/log-bus'
+import { appActionWithTakeover, getLogs, getLogsAround, getState, type ProcInfo } from '@/lib/api'
+import { anchorBus, logBus, stateBus, type LogAnchor } from '@/lib/log-bus'
 import { cn } from '@/lib/utils'
 import { ChevronDown, ChevronUp, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
 
@@ -200,6 +200,60 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
     if (!r) return
     registry.set('log-match-current', new HL(r))
   }, [matchIdx, matchCount])
+
+  // Jump to a specific timestamped line (alarm click): load the region if needed,
+  // scroll to it and flash-highlight it for a few seconds.
+  useEffect(() => {
+    let flashTimer: ReturnType<typeof setTimeout> | null = null
+    const jump = async (a: LogAnchor) => {
+      if (a.app !== app || a.proc !== proc) return
+      setFollow(false)
+      setSearch('')
+      setFilterMode(true)
+      let currentLines = lines
+      if (!currentLines.some((l) => l.startsWith(`[${a.ts}]`))) {
+        try {
+          const { logs } = await getLogsAround(app, proc, a.ts)
+          if (logs) {
+            currentLines = logs.split('\n')
+            setLines(currentLines)
+          }
+        } catch { /* keep current lines */ }
+      }
+      // Wait a tick for render, then locate + flash via the highlight registry
+      setTimeout(() => {
+        const registry = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights
+        const HL = (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+        if (!bodyRef.current) return
+        const walker = document.createTreeWalker(bodyRef.current, NodeFilter.SHOW_TEXT)
+        let node: Node | null
+        while ((node = walker.nextNode())) {
+          const t = node.textContent ?? ''
+          const idx = t.indexOf(`[${a.ts}]`)
+          if (idx < 0) continue
+          const lineEnd = t.indexOf('\n', idx)
+          const r = new Range()
+          r.setStart(node, idx)
+          r.setEnd(node, lineEnd > idx ? lineEnd : Math.min(t.length, idx + 300))
+          if (registry && HL) {
+            registry.set('log-anchor', new HL(r))
+            if (flashTimer) clearTimeout(flashTimer)
+            flashTimer = setTimeout(() => registry.delete('log-anchor'), 5000)
+          }
+          r.startContainer.parentElement?.scrollIntoView({ block: 'center' })
+          break
+        }
+      }, 150)
+    }
+    const pending = anchorBus.consumePending(app, proc)
+    if (pending) void jump(pending)
+    const unsub = anchorBus.subscribe((a) => void jump(a))
+    return () => {
+      unsub()
+      if (flashTimer) clearTimeout(flashTimer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app, proc, lines])
 
   const gotoMatch = (dir: 1 | -1) => {
     if (matchCount === 0) return

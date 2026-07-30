@@ -71,7 +71,8 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         lines.push(`Profiles: ${profNames.map((n) => `${n} → [${state.profiles[n].join(', ')}]`).join('; ')}`);
       }
       for (const app of state.apps) {
-        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''} (cwd: ${app.cwd})`);
+        const envTag = app.activeEnvironment ? ` [env: ${app.activeEnvironment}]` : '';
+        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''}${envTag} (cwd: ${app.cwd})`);
         if (app.lease) {
           const left = Math.round((app.lease.expires_at - Date.now()) / 1000);
           lines.push(`  LEASE: held by session '${app.lease.session}' for "${app.lease.reason}" (expires in ${left}s)`);
@@ -312,6 +313,97 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       return text(
         `TIMEOUT: no line matching /${pattern}/i appeared within ${timeout_seconds}s.\nLast 5 log lines:\n${context || '(no logs)'}`
       );
+    }
+  );
+
+  server.registerTool(
+    'list_alarms',
+    {
+      title: 'List alarms',
+      description:
+        'List alarms fired by log triggers (see define_trigger). Use this to check whether any watched error patterns occurred. Active = not yet acknowledged.',
+      inputSchema: {
+        active_only: z.boolean().default(true),
+        limit: z.number().int().min(1).max(200).default(30),
+      },
+    },
+    async ({ active_only, limit }) => {
+      const alarms = controller.store.listAlarms(limit, active_only);
+      if (alarms.length === 0) return text(active_only ? 'No active alarms.' : 'No alarms recorded.');
+      const lines = alarms.map((a) => {
+        const t = new Date(a.ts).toISOString();
+        return `[${a.severity.toUpperCase()}] ${t} '${a.trigger_name}' on ${a.app}/${a.proc}${a.acked ? ' (acked)' : ''}\n  ${a.line.slice(0, 200)}`;
+      });
+      return text(lines.join('\n'));
+    }
+  );
+
+  server.registerTool(
+    'define_trigger',
+    {
+      title: 'Define log trigger',
+      description:
+        'Create or update a persistent log trigger: when a log line of the target matches the regex, an alarm fires (visible in the dashboard bell and list_alarms; optionally notifies the user). ' +
+        'Unlike wait_for_log this persists across sessions and daemon restarts — use it to keep watching for an error after you finish.',
+      inputSchema: {
+        name: z.string().min(2).max(60),
+        target: z.string().default('*').describe('"*", "app", or "app/process"'),
+        pattern: z.string().describe('Case-insensitive regex tested against each log line'),
+        severity: z.enum(['info', 'warning', 'critical']).default('warning'),
+        notify: z.boolean().default(true).describe('Also send a macOS/Slack notification to the user'),
+        cooldown_seconds: z.number().int().min(0).default(60),
+      },
+    },
+    async ({ name, target, pattern, severity, notify, cooldown_seconds }) => {
+      try {
+        new RegExp(pattern, 'i');
+      } catch (err: any) {
+        return text(`Invalid regex: ${err.message}`);
+      }
+      if (target !== '*') {
+        const [app, proc] = target.split('/');
+        const appDef = controller.config.getApp(app);
+        if (!appDef) return text(`Unknown app '${app}' in target.`);
+        if (proc && !appDef.processes.some((p) => p.name === proc)) return text(`App '${app}' has no process '${proc}'.`);
+      }
+      const trigger = { name, target, pattern, severity, notify, cooldownSeconds: cooldown_seconds };
+      const idx = controller.config.triggers.findIndex((t) => t.name === name);
+      if (idx >= 0) controller.config.triggers[idx] = trigger;
+      else controller.config.triggers.push(trigger);
+      controller.config.save();
+      controller.config.onReload?.();
+      controller.store.audit({
+        session: actor.session, source: 'mcp', action: 'trigger-saved', app: '*',
+        detail: `${name}: /${pattern}/i on ${target} (${severity})`, result: 'saved',
+      });
+      return text(`Trigger '${name}' saved: /${pattern}/i on ${target}, severity ${severity}${notify ? ', with notification' : ''}.`);
+    }
+  );
+
+  server.registerTool(
+    'set_environment',
+    {
+      title: 'Set active environment',
+      description:
+        'Switch an app\'s active environment (dev/test/staging/prod — whatever is defined in its environments). The env layer applies to NEWLY started processes: restart the app to apply.',
+      inputSchema: {
+        app: z.string(),
+        environment: z.string().optional().describe('Omit or empty to clear (no environment layer)'),
+      },
+    },
+    async ({ app, environment }) => {
+      const appDef = controller.requireApp(app);
+      const env = environment?.trim() || undefined;
+      if (env && !(env in appDef.environments)) {
+        return text(`App '${app}' has no environment '${env}'. Defined: ${Object.keys(appDef.environments).join(', ') || '(none)'}`);
+      }
+      appDef.activeEnvironment = env;
+      controller.config.save();
+      controller.store.audit({
+        session: actor.session, source: 'mcp', action: 'set-environment', app,
+        detail: env ?? '(cleared)', result: 'saved',
+      });
+      return text(`App '${app}' active environment set to ${env ?? '(none)'}. Restart its processes to apply the new variables.`);
     }
   );
 

@@ -38,3 +38,44 @@ export const stateBus = {
     return () => stateListeners.delete(fn)
   },
 }
+
+// Fired when a new alarm arrives over SSE (bell refetches)
+type VoidListener = () => void
+const alarmListeners = new Set<VoidListener>()
+export const alarmsBus = {
+  emit() {
+    alarmListeners.forEach((fn) => fn())
+  },
+  subscribe(fn: VoidListener): () => void {
+    alarmListeners.add(fn)
+    return () => alarmListeners.delete(fn)
+  },
+}
+
+// "Jump to this timestamped line" requests for log panels
+export interface LogAnchor {
+  app: string
+  proc: string
+  ts: string
+}
+type AnchorListener = (a: LogAnchor) => void
+const anchorListeners = new Set<AnchorListener>()
+let pendingAnchor: LogAnchor | null = null
+export const anchorBus = {
+  emit(a: LogAnchor) {
+    pendingAnchor = a
+    anchorListeners.forEach((fn) => fn(a))
+  },
+  consumePending(app: string, proc: string): LogAnchor | null {
+    if (pendingAnchor && pendingAnchor.app === app && pendingAnchor.proc === proc) {
+      const a = pendingAnchor
+      pendingAnchor = null
+      return a
+    }
+    return null
+  },
+  subscribe(fn: AnchorListener): () => void {
+    anchorListeners.add(fn)
+    return () => anchorListeners.delete(fn)
+  },
+}

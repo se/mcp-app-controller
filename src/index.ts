@@ -8,6 +8,7 @@ import { HealthMonitor } from './health.js';
 import { MetricsMonitor } from './metrics.js';
 import { captureShellEnv } from './env.js';
 import { startNotifier } from './notify.js';
+import { TriggerEngine } from './triggers.js';
 import { restoreOnBoot } from './restore.js';
 import { createHttpServer } from './http.js';
 
@@ -31,6 +32,8 @@ metrics.hydrate(store.getKv('metrics_history'));
 metrics.start();
 setInterval(() => store.setKv('metrics_history', metrics.serialize()), 60_000);
 startNotifier(config);
+const triggerEngine = new TriggerEngine(config, store);
+triggerEngine.start();
 
 // Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
 // independent of the user's registered default shell.
@@ -43,7 +46,10 @@ async function refreshBaseEnv(): Promise<void> {
     console.error(`[env] failed to capture environment from '${config.envShell}': ${err.message}`);
   }
 }
-config.onReload = () => void refreshBaseEnv();
+config.onReload = () => {
+  void refreshBaseEnv();
+  triggerEngine.rebuild();
+};
 
 const app = createHttpServer(controller);
 const server = app.listen(PORT, '127.0.0.1', () => {
