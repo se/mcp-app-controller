@@ -42,6 +42,23 @@ short lease. When session B tries to restart the same app seconds later, it gets
 answer telling it *who* is working on the app and *why* — instead of silently killing A's
 process. You always override from the dashboard, and everything lands in the audit trail.
 
+### Build-once (`prepare`) and staggered starts
+
+Apps whose processes share compiled projects (e.g. five `dotnet run` processes all
+referencing the same core solution) waste CPU and can race MSBuild when started together.
+Two optional app-level settings fix this:
+
+- `prepare: <command>` — run to completion (in the app cwd, same env layering as
+  processes) before **every** start/restart operation of the app: whole-app, single
+  process, profile start, and boot restore. Concurrent operations share a single run,
+  and a success within the last 30s is reused (bursts don't re-build back-to-back).
+  Because the build is guaranteed fresh at spawn time, process commands can safely use
+  `--no-build` launchers for instant starts. Output is logged as pseudo-process
+  `<app>/prepare` (visible via `app_logs`); non-zero exit or timeout
+  (`prepareTimeoutMs`, default 10 min) aborts the operation.
+- `staggerMs: <n>` — pause between process starts in a multi-process operation, to
+  spread the CPU/RAM spikes of heavy dev servers (webpack etc.).
+
 ## Run
 
 ```bash

@@ -34,6 +34,17 @@ export const AppDefSchema = z
     // between app-wide env and process env
     environments: z.record(z.record(z.string())).default({}),
     activeEnvironment: z.string().optional(),
+    // One-shot build/preparation command (run in the app cwd, same env layering as
+    // processes) executed before EVERY start/restart operation of this app (whole-app,
+    // single process, profile start, boot restore). Concurrent operations share one
+    // run; a success within the last 30s is reused. Serializes the expensive shared
+    // build instead of N processes compiling the same projects concurrently, and makes
+    // `--no-build` launch commands safe (the build is always fresh at spawn time).
+    prepare: z.string().optional(),
+    prepareTimeoutMs: z.number().int().min(1000).default(600000),
+    // Optional pause between process starts in a multi-process operation (ms) —
+    // spreads out CPU/RAM spikes of heavy dev servers (webpack etc.)
+    staggerMs: z.number().int().min(0).default(0),
     processes: z.array(ProcessDefSchema).min(1),
   })
   .superRefine((app, ctx) => {

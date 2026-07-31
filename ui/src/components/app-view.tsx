@@ -13,8 +13,10 @@ import {
 import {
   appActionWithTakeover,
   fmtAgo,
+  fmtElapsed,
   fmtUptime,
   getMetricsHistory,
+  isStarting,
   releaseLease,
   type AppInfo,
   type AuditEntry,
@@ -23,7 +25,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
-import { Activity, ArrowLeft, Cpu, FileText, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
+import { Activity, ArrowLeft, Cpu, FileText, Hammer, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return <span className="text-[10px] text-muted-foreground">—</span>
@@ -40,23 +42,95 @@ function Sparkline({ values, className }: { values: number[]; className?: string
   )
 }
 
+/**
+ * Gantt-style visualization of the last whole-app start: the prepare bar first,
+ * then one bar per process — offset by its spawn time relative to the operation
+ * start, bar length = time until its first healthy check (live while starting).
+ */
+function StartupTimeline({ app }: { app: AppInfo }) {
+  const op = app.lastStart
+  const anyStarting = app.preparing || app.processes.some(isStarting)
+  if (!op && !anyStarting) return null
+  const t0 = op?.at ?? Math.min(...app.processes.filter((p) => p.startedAt).map((p) => p.startedAt!))
+  const now = Date.now()
+  const rows: { name: string; offset: number; dur: number; live: boolean; kind: 'prepare' | 'proc'; noCheck?: boolean }[] = []
+  if (app.prepare && op && op.prepareMs > 0) rows.push({ name: 'prepare', offset: 0, dur: op.prepareMs, live: false, kind: 'prepare' })
+  if (app.preparing) rows.push({ name: 'prepare', offset: 0, dur: now - t0, live: true, kind: 'prepare' })
+  for (const p of app.processes) {
+    if (!p.startedAt || p.startedAt < t0 - 2000) continue
+    const offset = Math.max(0, p.startedAt - t0)
+    if (isStarting(p)) rows.push({ name: p.name, offset, dur: now - p.startedAt, live: true, kind: 'proc' })
+    else if (p.readyInMs !== null) rows.push({ name: p.name, offset, dur: p.readyInMs, live: false, kind: 'proc' })
+    else if (p.status === 'running') rows.push({ name: p.name, offset, dur: 0, live: false, kind: 'proc', noCheck: true })
+  }
+  if (rows.length === 0) return null
+  const total = Math.max(...rows.map((r) => r.offset + r.dur), op?.totalMs ?? 0, 1)
+  return (
+    <Card className="gap-0 overflow-hidden py-0">
+      <div className="flex items-center justify-between border-b px-4 py-2.5">
+        <span className="text-sm font-medium">Startup timeline</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          {anyStarting ? (
+            <span className="animate-pulse text-sky-600 dark:text-sky-400">in progress — {fmtElapsed(now - t0)}</span>
+          ) : op ? (
+            <>total {fmtElapsed(op.totalMs)} · prepare {fmtElapsed(op.prepareMs)} · {fmtAgo(op.at)}</>
+          ) : null}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1.5 px-4 py-3">
+        {rows.map((r, i) => (
+          <div key={`${r.name}-${i}`} className="flex items-center gap-2">
+            <span className={cn('w-24 shrink-0 truncate text-right font-mono text-[11px]', r.kind === 'prepare' ? 'text-violet-600 dark:text-violet-400' : 'text-muted-foreground')}>
+              {r.name}
+            </span>
+            <div className="relative h-4 flex-1 overflow-hidden rounded bg-muted/50">
+              <div
+                className={cn(
+                  'absolute top-0 h-full rounded',
+                  r.kind === 'prepare'
+                    ? 'bg-violet-500/70'
+                    : r.live
+                      ? 'animate-pulse bg-sky-500/70'
+                      : 'bg-emerald-500/60'
+                )}
+                style={{
+                  left: `${(r.offset / total) * 100}%`,
+                  width: r.noCheck ? '2px' : `${Math.max((r.dur / total) * 100, 0.5)}%`,
+                }}
+              />
+            </div>
+            <span className={cn('w-16 shrink-0 text-right font-mono text-[11px] tabular-nums', r.live ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground')}>
+              {r.noCheck ? 'spawned' : `${fmtElapsed(r.dur)}${r.live ? '…' : ''}`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 function statusBadge(p: ProcInfo) {
-  const unhealthy = p.status === 'running' && p.health === 'unhealthy'
+  // "starting" until the FIRST healthy check of this run; "unhealthy" only when it
+  // degrades after having been ready — no more premature green on fresh starts.
+  const starting = isStarting(p)
+  const unhealthy = !starting && p.status === 'running' && p.health === 'unhealthy'
   return (
     <Badge
       variant="outline"
       className={cn(
         'text-[11px]',
-        unhealthy
-          ? 'border-amber-500/50 text-amber-600 dark:text-amber-400'
-          : p.status === 'running'
-            ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-            : p.status === 'crashed'
-              ? 'border-red-500/40 text-red-600 dark:text-red-400'
-              : 'text-muted-foreground'
+        starting
+          ? 'animate-pulse border-sky-500/50 text-sky-600 dark:text-sky-400'
+          : unhealthy
+            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400'
+            : p.status === 'running'
+              ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+              : p.status === 'crashed'
+                ? 'border-red-500/40 text-red-600 dark:text-red-400'
+                : 'text-muted-foreground'
       )}
     >
-      {unhealthy ? 'unhealthy' : p.status}
+      {starting ? 'starting' : unhealthy ? 'unhealthy' : p.status}
     </Badge>
   )
 }
@@ -181,7 +255,7 @@ export function AppView({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <Card className="gap-1 p-4">
           <div className="flex items-center justify-between text-xs text-muted-foreground">Running <Activity className="size-3.5" /></div>
           <div className="text-2xl font-semibold tabular-nums">{running.length}<span className="text-sm text-muted-foreground">/{app.processes.length}</span></div>
@@ -208,7 +282,43 @@ export function AppView({
           </div>
           <div className="text-[11px] text-muted-foreground">oldest running process</div>
         </Card>
+        <Card className="gap-1 p-4">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">Last start <Hammer className="size-3.5" /></div>
+          <div className="text-2xl font-semibold tabular-nums">
+            {app.preparing || app.processes.some(isStarting)
+              ? <span className="animate-pulse text-sky-600 dark:text-sky-400">…</span>
+              : app.lastStart ? fmtElapsed(app.lastStart.totalMs) : '—'}
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {app.lastStart
+              ? `${app.lastStart.procs} procs · prepare ${fmtElapsed(app.lastStart.prepareMs)} · ${fmtAgo(app.lastStart.at)}`
+              : 'total, incl. prepare, until healthy'}
+          </div>
+        </Card>
       </div>
+
+      <StartupTimeline app={app} />
+
+      {app.prepare && (
+        <div
+          className={cn(
+            'flex items-center justify-between gap-2 rounded-lg border px-4 py-2 text-xs',
+            app.preparing
+              ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400'
+              : 'border-border bg-muted/40 text-muted-foreground'
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Hammer className={cn('size-3.5 shrink-0', app.preparing && 'animate-pulse')} />
+            <span className="shrink-0 font-medium">{app.preparing ? 'prepare: building…' : 'prepare'}</span>
+            <span className="truncate font-mono text-[11px]" title={app.prepare}>{app.prepare}</span>
+            {app.staggerMs > 0 && <span className="shrink-0 text-[10px] opacity-70">stagger {app.staggerMs}ms</span>}
+          </span>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs" onClick={() => onLogs('prepare')}>
+            <FileText className="size-3" /> logs
+          </Button>
+        </div>
+      )}
 
       <Card className="overflow-hidden py-0">
         <Table>
@@ -218,6 +328,7 @@ export function AppView({
               <TableHead className="w-24">Status</TableHead>
               <TableHead className="w-20">PID</TableHead>
               <TableHead className="w-20">Uptime</TableHead>
+              <TableHead className="w-20">Ready in</TableHead>
               <TableHead className="w-20">CPU</TableHead>
               <TableHead className="w-24">Memory</TableHead>
               <TableHead className="w-28">CPU (10m)</TableHead>
@@ -242,6 +353,17 @@ export function AppView({
                 <TableCell>{statusBadge(p)}</TableCell>
                 <TableCell className="font-mono text-xs">{p.pid ?? '—'}</TableCell>
                 <TableCell className="text-xs">{p.status === 'running' ? fmtUptime(p.startedAt!) : '—'}</TableCell>
+                <TableCell className="text-xs tabular-nums">
+                  {isStarting(p) ? (
+                    <span className="animate-pulse text-sky-600 dark:text-sky-400">
+                      {fmtElapsed(Date.now() - p.startedAt!)}…
+                    </span>
+                  ) : p.readyInMs !== null ? (
+                    fmtElapsed(p.readyInMs)
+                  ) : (
+                    '—'
+                  )}
+                </TableCell>
                 <TableCell className="text-xs tabular-nums">{p.metrics ? `${p.metrics.cpu}%` : '—'}</TableCell>
                 <TableCell className="text-xs tabular-nums">{p.metrics ? `${p.metrics.memMb} MB` : '—'}</TableCell>
                 <TableCell className="text-sky-600 dark:text-sky-400">

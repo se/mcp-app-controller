@@ -233,6 +233,39 @@ export function createHttpServer(controller: Controller) {
     res.json(controller.metrics?.getHistory(req.params.app, req.params.proc) ?? []);
   });
 
+  // Environment captured from the login shell at daemon startup — what every managed
+  // process inherits below app/process env. Sensitive values are masked unless ?reveal=1.
+  api.get('/daemon/env', (req, res) => {
+    const reveal = req.query.reveal === '1';
+    const sensitive = /key|secret|password|token|pgp|auth|credential|_cs\b|connectionstring/i;
+    const vars: Record<string, string> = {};
+    for (const [k, v] of Object.entries(controller.pm.baseEnv)) {
+      vars[k] = !reveal && sensitive.test(k) ? '••••••••' : v;
+    }
+    res.json({ shell: controller.config.envShell ?? null, vars });
+  });
+
+  // Re-run the login shell and swap in its current environment — no daemon restart
+  // needed after editing shell config. Applies to processes started AFTER this call.
+  api.post('/daemon/env/recapture', async (_req, res) => {
+    const shell = controller.config.envShell;
+    if (!shell) {
+      res.status(400).json({ error: 'No envShell configured in apps.yaml — nothing to re-capture.' });
+      return;
+    }
+    try {
+      const { captureShellEnv } = await import('./env.js');
+      controller.pm.baseEnv = await captureShellEnv(shell);
+      controller.store.audit({
+        session: 'ui', source: 'ui', action: 'env-recapture', app: '*',
+        detail: `re-captured login environment from ${shell}`, result: `${Object.keys(controller.pm.baseEnv).length} vars`,
+      });
+      res.json({ ok: true, count: Object.keys(controller.pm.baseEnv).length });
+    } catch (err: any) {
+      res.status(500).json({ error: `Shell env capture failed: ${err.message}` });
+    }
+  });
+
   api.get('/apps/:app/logs/:proc', (req, res) => {
     const lines = Math.min(Number(req.query.lines) || 200, 2000);
     try {
@@ -421,7 +454,8 @@ export function createHttpServer(controller: Controller) {
     bus.on('audit', onAudit);
     bus.on('metrics', onMetrics);
     bus.on('alarm', onAlarm);
-    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+    // Real event (not an SSE comment) so the client can use it as a liveness heartbeat
+    const ping = setInterval(() => send('ping', null), 25000);
     req.on('close', () => {
       clearInterval(ping);
       bus.off('state', onState);

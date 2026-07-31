@@ -17,6 +17,8 @@ export interface ProcInfo {
   ports: number[]
   dependsOn: string[]
   health: 'healthy' | 'unhealthy' | 'unknown' | null
+  /** ms from spawn to first healthy for the current run; null until first healthy */
+  readyInMs: number | null
   metrics: ProcMetrics | null
   status: 'running' | 'stopped' | 'crashed'
   pid?: number
@@ -40,8 +42,26 @@ export interface AppInfo {
   env: Record<string, string>
   environments: Record<string, Record<string, string>>
   activeEnvironment: string | null
+  prepare: string | null
+  staggerMs: number
+  preparing: boolean
+  /** Timing of the last whole-app start/restart (incl. prepare, until healthy) */
+  lastStart: { at: number; prepareMs: number; totalMs: number; procs: number } | null
   lease: Lease | null
   processes: ProcInfo[]
+}
+
+/** Elapsed ms → compact human string (e.g. "48s", "2m 05s") */
+export function fmtElapsed(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return `${m}m ${String(s % 60).padStart(2, '0')}s`
+}
+
+/** A process is "starting" until its first healthy check of the current run. */
+export function isStarting(p: ProcInfo): boolean {
+  return p.status === 'running' && p.health !== null && p.readyInMs === null
 }
 
 export interface Alarm {
@@ -80,6 +100,11 @@ export interface AppDefInput {
   name: string
   description: string
   cwd: string
+  env?: Record<string, string>
+  environments?: Record<string, Record<string, string>>
+  activeEnvironment?: string
+  prepare?: string
+  staggerMs?: number
   processes: {
     name: string
     command: string
@@ -202,6 +227,11 @@ export const releaseLease = (app: string) =>
 
 export const clearAudit = (olderThanDays?: number) =>
   api<{ removed: number }>(`/audit${olderThanDays ? `?olderThanDays=${olderThanDays}` : ''}`, { method: 'DELETE' })
+
+export const getDaemonEnv = (reveal = false) =>
+  api<{ shell: string | null; vars: Record<string, string> }>(`/daemon/env${reveal ? '?reveal=1' : ''}`)
+export const recaptureDaemonEnv = () =>
+  api<{ ok: boolean; count: number }>('/daemon/env/recapture', { method: 'POST', body: '{}' })
 
 export const saveApp = (def: AppDefInput) => api('/apps', { method: 'POST', body: JSON.stringify(def) })
 export const deleteApp = (app: string) => api(`/apps/${encodeURIComponent(app)}`, { method: 'DELETE' })

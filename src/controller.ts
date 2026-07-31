@@ -4,6 +4,18 @@ import type { ProcessManager, Mode, ProcState } from './process-manager.js';
 import { hasHealthCheck, type HealthMonitor } from './health.js';
 import type { MetricsMonitor } from './metrics.js';
 import { KeyedQueue } from './queue.js';
+import { bus } from './events.js';
+
+export interface AppStartSummary {
+  /** When the operation (incl. prepare) began */
+  at: number;
+  /** Time the prepare step took (0 when skipped/not configured) */
+  prepareMs: number;
+  /** Total time until every started process with a health check reported healthy */
+  totalMs: number;
+  /** Number of processes covered by the operation */
+  procs: number;
+}
 
 export const ACTION_LEASE_MS = 5 * 60 * 1000;
 
@@ -32,12 +44,90 @@ export class Controller {
   public health?: HealthMonitor;
   public metrics?: MetricsMonitor;
   private queue = new KeyedQueue();
+  /** In-flight `prepare` runs per app — concurrent multi-starts share one build. */
+  private preparing = new Map<string, Promise<void>>();
+  /** Last successful prepare per app — bursts of operations skip redundant re-builds. */
+  private preparedAt = new Map<string, number>();
 
   constructor(
     public config: ConfigStore,
     public store: Store,
     public pm: ProcessManager
   ) {}
+
+  /**
+   * Run the app's `prepare` command once (build-once). Concurrent callers (profile
+   * start + restore burst, etc.) await the same run. Throws on failure/timeout.
+   */
+  async ensurePrepared(app: AppDef, actor: ActorCtx): Promise<void> {
+    if (!app.prepare) return;
+    let inFlight = this.preparing.get(app.name);
+    if (!inFlight) {
+      inFlight = this.pm
+        .runToCompletion(app, 'prepare', app.prepare, app.prepareTimeoutMs)
+        .then(() => { this.preparedAt.set(app.name, Date.now()); })
+        .finally(() => this.preparing.delete(app.name));
+      this.preparing.set(app.name, inFlight);
+      this.store.audit({
+        session: actor.session, source: actor.source, action: 'prepare',
+        app: app.name, proc: 'prepare', detail: app.prepare.slice(0, 200), result: 'started',
+      });
+    }
+    await inFlight;
+  }
+
+  /**
+   * Prepare (when configured) before EVERY start/restart operation of the app —
+   * this is what makes `--no-build` launch commands safe: the build is always fresh.
+   * A successful prepare within the last 30s is reused (bursts: profile start,
+   * restore, dependency auto-starts don't re-build back-to-back).
+   */
+  private async prepareForStart(app: AppDef, actor: ActorCtx, reason: string): Promise<string | null> {
+    if (!app.prepare) return null;
+    const last = this.preparedAt.get(app.name);
+    if (last && Date.now() - last < 30000 && !this.preparing.has(app.name)) return null;
+    try {
+      await this.ensurePrepared(app, actor);
+      return null;
+    } catch (err: any) {
+      const msg = `prepare failed: ${err.message}`;
+      this.store.audit({
+        session: actor.session, source: actor.source, action: 'prepare',
+        app: app.name, proc: 'prepare', detail: reason, result: `error: ${err.message}`,
+      });
+      return msg;
+    }
+  }
+
+  /** Ramp delay for parallel multi-starts: process i waits i × staggerMs before spawning. */
+  private async stagger(app: AppDef, index: number): Promise<void> {
+    if (index > 0 && app.staggerMs > 0) await new Promise((r) => setTimeout(r, index * app.staggerMs));
+  }
+
+  /** Last multi-process start/restart timing per app (kept in memory). */
+  private lastStart = new Map<string, AppStartSummary>();
+
+  /**
+   * Record a whole-app start: waits in the background until every running process
+   * with a health check reports healthy, then stores the total elapsed time
+   * (measured from t0, i.e. including prepare) and pushes a state update.
+   */
+  trackAppStart(appName: string, t0: number, prepareMs: number, procs: number): void {
+    const app = this.config.getApp(appName);
+    if (!app) return;
+    void (async () => {
+      const watched = app.processes.filter((p) => this.pm.isRunning(appName, p.name) && hasHealthCheck(p));
+      if (this.health) {
+        await Promise.all(watched.map((p) => this.health!.waitHealthy(appName, p.name, 180000)));
+      }
+      this.lastStart.set(appName, { at: t0, prepareMs, totalMs: Date.now() - t0, procs });
+      bus.emit('state');
+    })();
+  }
+
+  getLastStart(appName: string): AppStartSummary | null {
+    return this.lastStart.get(appName) ?? null;
+  }
 
   /** Dependencies first (stable topological order; cycles broken silently). */
   private topoSort(procs: ProcessDef[]): ProcessDef[] {
@@ -152,6 +242,18 @@ export class Controller {
     return [p];
   }
 
+  /**
+   * Like selectProcesses, but for log-reading tools: also accepts the 'prepare'
+   * pseudo-process (the app's build-once command logs under '<app>/prepare').
+   */
+  selectLogProcesses(app: AppDef, proc?: string): { name: string }[] {
+    if (proc === 'prepare') {
+      if (!app.prepare) throw new Error(`App '${app.name}' has no prepare command configured`);
+      return [{ name: 'prepare' }];
+    }
+    return this.selectProcesses(app, proc);
+  }
+
   /** Returns conflict info if another actor holds an active lease and force is not set. */
   checkConflict(appName: string, actor: ActorCtx, force: boolean): ConflictInfo | null {
     const lease = this.store.getLease(appName);
@@ -187,38 +289,51 @@ export class Controller {
     const app = this.requireApp(appName);
     const conflict = this.checkConflict(appName, actor, force);
     if (conflict) return conflict;
-    const results: ProcResult[] = [];
-    for (const p of this.topoSort(this.selectProcesses(app, proc))) {
-      const outcome = await this.queue.enqueue(
-        `${appName}/${p.name}`,
-        `start(${mode}) by ${actor.session}`,
-        async (): Promise<ProcResult> => {
-          try {
-            const depErr = await this.ensureDeps(app, p, mode, actor, takeover);
-            if (depErr) {
-              this.store.audit({
-                session: actor.session, source: actor.source, action: `start(${mode})`,
-                app: appName, proc: p.name, detail: reason, result: `error: ${depErr}`,
-              });
-              return { proc: p.name, state: this.pm.getState(appName, p.name), error: depErr };
+    const procs = this.topoSort(this.selectProcesses(app, proc));
+    const t0 = Date.now();
+    const prepErr = await this.prepareForStart(app, actor, reason);
+    if (prepErr) return procs.map((p) => ({ proc: p.name, state: this.pm.getState(appName, p.name), error: prepErr }));
+    const prepareMs = Date.now() - t0;
+    // All processes launch IN PARALLEL (per-process queue still serializes each one);
+    // processes without dependsOn spawn immediately (after their stagger ramp slot),
+    // dependent ones proceed inside ensureDeps as soon as their dependency is ready.
+    const results = await Promise.all(
+      procs.map((p, i) =>
+        (async (): Promise<ProcResult> => {
+          await this.stagger(app, i);
+          const outcome = await this.queue.enqueue(
+            `${appName}/${p.name}`,
+            `start(${mode}) by ${actor.session}`,
+            async (): Promise<ProcResult> => {
+              try {
+                const depErr = await this.ensureDeps(app, p, mode, actor, takeover);
+                if (depErr) {
+                  this.store.audit({
+                    session: actor.session, source: actor.source, action: `start(${mode})`,
+                    app: appName, proc: p.name, detail: reason, result: `error: ${depErr}`,
+                  });
+                  return { proc: p.name, state: this.pm.getState(appName, p.name), error: depErr };
+                }
+                const state = await this.pm.start(app, p, mode, actor.session, actor.source, takeover);
+                this.store.audit({
+                  session: actor.session, source: actor.source, action: `start(${mode})`,
+                  app: appName, proc: p.name, detail: reason, result: state.status,
+                });
+                return { proc: p.name, state };
+              } catch (err: any) {
+                this.store.audit({
+                  session: actor.session, source: actor.source, action: `start(${mode})`,
+                  app: appName, proc: p.name, detail: reason, result: `error: ${err.message}`,
+                });
+                return { proc: p.name, state: this.pm.getState(appName, p.name), error: err.message };
+              }
             }
-            const state = await this.pm.start(app, p, mode, actor.session, actor.source, takeover);
-            this.store.audit({
-              session: actor.session, source: actor.source, action: `start(${mode})`,
-              app: appName, proc: p.name, detail: reason, result: state.status,
-            });
-            return { proc: p.name, state };
-          } catch (err: any) {
-            this.store.audit({
-              session: actor.session, source: actor.source, action: `start(${mode})`,
-              app: appName, proc: p.name, detail: reason, result: `error: ${err.message}`,
-            });
-            return { proc: p.name, state: this.pm.getState(appName, p.name), error: err.message };
-          }
-        }
-      );
-      results.push(this.resolveOutcome(outcome, appName, p.name, actor, reason));
-    }
+          );
+          return this.resolveOutcome(outcome, appName, p.name, actor, reason);
+        })()
+      )
+    );
+    if (procs.length >= 2) this.trackAppStart(appName, t0, prepareMs, procs.length);
     this.touchLease(appName, actor, reason);
     if (waitReady) await this.awaitReady(appName, results, app);
     return results;
@@ -282,41 +397,53 @@ export class Controller {
     const app = this.requireApp(appName);
     const conflict = this.checkConflict(appName, actor, force);
     if (conflict) return conflict;
-    const results: ProcResult[] = [];
-    for (const p of this.selectProcesses(app, proc)) {
-      const outcome = await this.queue.enqueue(
-        `${appName}/${p.name}`,
-        `restart by ${actor.session}`,
-        async (): Promise<ProcResult> => {
-          const prev = this.pm.getState(appName, p.name);
-          const nextMode: Mode = mode ?? prev.mode ?? 'start';
-          try {
-            await this.pm.stop(appName, p.name);
-            const depErr = await this.ensureDeps(app, p, nextMode, actor, takeover);
-            if (depErr) {
-              this.store.audit({
-                session: actor.session, source: actor.source, action: `restart(${nextMode})`,
-                app: appName, proc: p.name, detail: reason, result: `error: ${depErr}`,
-              });
-              return { proc: p.name, state: this.pm.getState(appName, p.name), error: depErr };
+    const procs = this.selectProcesses(app, proc);
+    const t0 = Date.now();
+    const prepErr = await this.prepareForStart(app, actor, reason);
+    if (prepErr) return procs.map((p) => ({ proc: p.name, state: this.pm.getState(appName, p.name), error: prepErr }));
+    const prepareMs = Date.now() - t0;
+    // Parallel like start(): each process stops+starts in its own task; dependsOn
+    // waiters resume as soon as their dependency reports ready.
+    const results = await Promise.all(
+      procs.map((p, i) =>
+        (async (): Promise<ProcResult> => {
+          await this.stagger(app, i);
+          const outcome = await this.queue.enqueue(
+            `${appName}/${p.name}`,
+            `restart by ${actor.session}`,
+            async (): Promise<ProcResult> => {
+              const prev = this.pm.getState(appName, p.name);
+              const nextMode: Mode = mode ?? prev.mode ?? 'start';
+              try {
+                await this.pm.stop(appName, p.name);
+                const depErr = await this.ensureDeps(app, p, nextMode, actor, takeover);
+                if (depErr) {
+                  this.store.audit({
+                    session: actor.session, source: actor.source, action: `restart(${nextMode})`,
+                    app: appName, proc: p.name, detail: reason, result: `error: ${depErr}`,
+                  });
+                  return { proc: p.name, state: this.pm.getState(appName, p.name), error: depErr };
+                }
+                const state = await this.pm.start(app, p, nextMode, actor.session, actor.source, takeover);
+                this.store.audit({
+                  session: actor.session, source: actor.source, action: `restart(${nextMode})`,
+                  app: appName, proc: p.name, detail: reason, result: state.status,
+                });
+                return { proc: p.name, state };
+              } catch (err: any) {
+                this.store.audit({
+                  session: actor.session, source: actor.source, action: `restart(${nextMode})`,
+                  app: appName, proc: p.name, detail: reason, result: `error: ${err.message}`,
+                });
+                return { proc: p.name, state: this.pm.getState(appName, p.name), error: err.message };
+              }
             }
-            const state = await this.pm.start(app, p, nextMode, actor.session, actor.source, takeover);
-            this.store.audit({
-              session: actor.session, source: actor.source, action: `restart(${nextMode})`,
-              app: appName, proc: p.name, detail: reason, result: state.status,
-            });
-            return { proc: p.name, state };
-          } catch (err: any) {
-            this.store.audit({
-              session: actor.session, source: actor.source, action: `restart(${nextMode})`,
-              app: appName, proc: p.name, detail: reason, result: `error: ${err.message}`,
-            });
-            return { proc: p.name, state: this.pm.getState(appName, p.name), error: err.message };
-          }
-        }
-      );
-      results.push(this.resolveOutcome(outcome, appName, p.name, actor, reason));
-    }
+          );
+          return this.resolveOutcome(outcome, appName, p.name, actor, reason);
+        })()
+      )
+    );
+    if (procs.length >= 2) this.trackAppStart(appName, t0, prepareMs, procs.length);
     this.touchLease(appName, actor, reason);
     if (waitReady) await this.awaitReady(appName, results, app);
     return results;
@@ -348,6 +475,10 @@ export class Controller {
         env: app.env,
         environments: app.environments,
         activeEnvironment: app.activeEnvironment ?? null,
+        prepare: app.prepare ?? null,
+        staggerMs: app.staggerMs,
+        preparing: this.preparing.has(app.name),
+        lastStart: this.lastStart.get(app.name) ?? null,
         lease: leases.find((l) => l.app === app.name) ?? null,
         processes: app.processes.map((p) => ({
           name: p.name,
@@ -362,6 +493,7 @@ export class Controller {
           ports: p.ports,
           dependsOn: p.dependsOn,
           health: this.health?.getHealth(app.name, p.name) ?? null,
+          readyInMs: this.health?.getReadyMs(app.name, p.name) ?? null,
           metrics: this.metrics?.latest.get(`${app.name}/${p.name}`) ?? null,
           ...this.pm.getState(app.name, p.name),
         })),

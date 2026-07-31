@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { appActionWithTakeover, deleteApp, fmtUptime, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
+import { appActionWithTakeover, deleteApp, fmtElapsed, fmtUptime, isStarting, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
 import { ChevronDown, ChevronRight, FileText, Lock, Pencil, Pin, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -30,15 +30,23 @@ function ProcTooltipContent({ p }: { p: ProcInfo }) {
   )
 }
 
-function StatusDot({ status, health }: { status: ProcInfo['status']; health: ProcInfo['health'] }) {
-  const unhealthy = status === 'running' && health === 'unhealthy'
+// dot | process | pid | uptime | ready | cpu | memory | command (flex) | actions
+const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
+
+function StatusDot({ p }: { p: ProcInfo }) {
+  const { status, health } = p
+  // Blue while starting (running, health check configured, never healthy yet this run);
+  // green only after the first healthy check; amber = degraded after having been ready.
+  const starting = isStarting(p)
+  const unhealthy = !starting && status === 'running' && health === 'unhealthy'
   return (
     <span
-      title={unhealthy ? 'running but unhealthy' : health ? `${status} (${health})` : status}
+      title={starting ? 'starting — waiting for first healthy check' : unhealthy ? 'running but unhealthy' : health ? `${status} (${health})` : status}
       className={cn(
         'size-2.5 shrink-0 rounded-full',
+        starting && 'animate-pulse bg-sky-500 shadow-[0_0_6px_theme(colors.sky.500)]',
         unhealthy && 'animate-pulse bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500)]',
-        !unhealthy && status === 'running' && 'bg-emerald-500 shadow-[0_0_6px_theme(colors.emerald.500)]',
+        !starting && !unhealthy && status === 'running' && 'bg-emerald-500 shadow-[0_0_6px_theme(colors.emerald.500)]',
         status === 'stopped' && 'bg-muted-foreground/50',
         status === 'crashed' && 'bg-red-500 shadow-[0_0_6px_theme(colors.red.500)]'
       )}
@@ -104,6 +112,15 @@ export function AppCard({
                 {app.name}
               </button>
               {pinned && <Pin className="size-3 shrink-0 self-center fill-current text-primary" />}
+              {(app.preparing || app.processes.some(isStarting)) ? (
+                <Badge variant="outline" className="h-5 animate-pulse border-sky-500/50 px-1.5 text-[10px] text-sky-600 dark:text-sky-400">
+                  {app.preparing ? 'preparing…' : 'starting…'}
+                </Badge>
+              ) : app.lastStart ? (
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" title={`last full start: ${fmtElapsed(app.lastStart.totalMs)} total (prepare ${fmtElapsed(app.lastStart.prepareMs)}), ${app.lastStart.procs} processes`}>
+                  ⏱ {fmtElapsed(app.lastStart.totalMs)}
+                </span>
+              ) : null}
               {app.description && <span className="truncate text-xs text-muted-foreground">{app.description}</span>}
             </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">{app.cwd}</div>
@@ -148,7 +165,7 @@ export function AppCard({
               <Tooltip key={p.name}>
                 <TooltipTrigger asChild>
                   <span className="inline-flex cursor-default">
-                    <StatusDot status={p.status} health={p.health} />
+                    <StatusDot p={p} />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="top">
@@ -195,38 +212,72 @@ export function AppCard({
         </div>
       )}
 
+      {!collapsed && app.preparing && (
+        <div className="mx-5 mb-2 flex items-center gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-[11px] text-sky-700 dark:text-sky-400">
+          <span className="font-medium">prepare: building…</span>
+          <span className="truncate font-mono opacity-80">{app.prepare}</span>
+        </div>
+      )}
+
       {!collapsed && (
       <CardContent className="px-0 pb-0">
-        {app.processes.map((p, i) => (
+        {/* Column header — the per-row labels (pid, up, ready, cpu...) live here now.
+            Inline gridTemplateColumns: numeric cols stay tight, Command absorbs the rest. */}
+        <Separator />
+        <div className="grid items-center gap-x-3 px-5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+          <span />
+          <span>Process</span>
+          <span className="text-right">PID</span>
+          <span className="text-right">Uptime</span>
+          <span className="text-right">Ready in</span>
+          <span className="text-right">CPU</span>
+          <span className="text-right">Memory</span>
+          <span>Command</span>
+          <span className="text-right">Actions</span>
+        </div>
+        {app.processes.map((p) => (
           <div key={p.name}>
-            {(i > 0 || true) && <Separator />}
-            <div className="flex items-center gap-3 px-5 py-2.5">
-              <StatusDot status={p.status} health={p.health} />
-              <span className="w-24 shrink-0 truncate text-sm font-medium">{p.name}</span>
-              {p.status === 'running' && (
-                <Badge variant="outline" className="h-5 px-1.5 text-[10px] uppercase text-sky-600 dark:text-sky-400 border-sky-500/40">
-                  {p.mode}
-                </Badge>
-              )}
-              {p.status === 'running' && p.health === 'unhealthy' && (
-                <Badge variant="outline" className="h-5 border-amber-500/50 px-1.5 text-[10px] uppercase text-amber-500">
-                  unhealthy
-                </Badge>
-              )}
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
-                title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : undefined}
-              >
-                {p.status === 'running' &&
-                  `pid ${p.pid} · up ${fmtUptime(p.startedAt!)}${p.metrics ? ` · ${p.metrics.cpu}% · ${p.metrics.memMb} MB` : ''} · `}
-                {p.status === 'crashed' && (
-                  <span className="text-red-600 dark:text-red-400">
-                    exit {p.lastExit?.code ?? '?'}{p.lastExit?.summary ? ` · ${p.lastExit.summary}` : ''} ·{' '}
-                  </span>
+            <Separator />
+            <div className="grid items-center gap-x-3 px-5 py-2" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+              <StatusDot p={p} />
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-sm font-medium">{p.name}</span>
+                {p.status === 'running' && p.mode === 'dev' && (
+                  <Badge variant="outline" className="h-4 border-sky-500/40 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400">dev</Badge>
                 )}
-                {p.command}
               </span>
-              <div className="flex shrink-0 gap-1">
+              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
+              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+                {p.status === 'running' ? fmtUptime(p.startedAt!) : '—'}
+              </span>
+              <span className="text-right font-mono text-[11px] tabular-nums">
+                {isStarting(p) ? (
+                  <span className="animate-pulse text-sky-600 dark:text-sky-400">{fmtElapsed(Date.now() - p.startedAt!)}…</span>
+                ) : p.readyInMs !== null ? (
+                  <span className="text-muted-foreground">{fmtElapsed(p.readyInMs)}</span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </span>
+              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+                {p.metrics && p.status === 'running' ? `${p.metrics.cpu}%` : '—'}
+              </span>
+              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+                {p.metrics && p.status === 'running' ? `${p.metrics.memMb} MB` : '—'}
+              </span>
+              <span
+                className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+                title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}
+              >
+                {p.status === 'crashed' ? (
+                  <span className="text-red-600 dark:text-red-400">
+                    exit {p.lastExit?.code ?? '?'}{p.lastExit?.summary ? ` · ${p.lastExit.summary}` : ''}
+                  </span>
+                ) : (
+                  p.command
+                )}
+              </span>
+              <div className="flex shrink-0 justify-end gap-1">
                 {p.status === 'running' ? (
                   <>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy !== null}

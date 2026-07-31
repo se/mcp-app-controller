@@ -16,16 +16,19 @@ import { AppFormDialog } from '@/components/app-form-dialog'
 import { Sidebar, type View } from '@/components/sidebar'
 import { StatTiles } from '@/components/stat-tiles'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { Plus } from 'lucide-react'
+import { EnvModal } from '@/components/env-modal'
+import { Plus, RotateCw, SquareTerminal } from 'lucide-react'
 
 function Dashboard() {
   const [apps, setApps] = useState<AppInfo[]>([])
   const [profiles, setProfiles] = useState<Record<string, string[]>>({})
   const [audit, setAudit] = useState<AuditEntry[]>([])
-  const [connected, setConnected] = useState(false)
+  // 'connecting' until the stream settles — a page load must not flash red
+  const [connection, setConnection] = useState<'connecting' | 'live' | 'down'>('connecting')
   const [formOpen, setFormOpen] = useState(false)
   const [editApp, setEditApp] = useState<AppInfo | null>(null)
   const [view, setView] = useState<View>('overview')
+  const [envOpen, setEnvOpen] = useState(false)
   const [pinned, setPinned] = useState<string[]>(() => loadPref('appctrl-pinned'))
   const [collapsed, setCollapsed] = useState<string[]>(() => loadPref('appctrl-collapsed'))
   const dockRef = useRef<LogDockHandle>(null)
@@ -50,27 +53,52 @@ function Dashboard() {
     return [...pinnedApps, ...apps.filter((a) => !pinned.includes(a.name))]
   }, [apps, pinned])
 
+  const [refreshing, setRefreshing] = useState(false)
   const refresh = useCallback(() => {
-    getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }).catch(() => {})
-    getAudit().then(setAudit).catch(() => {})
+    setRefreshing(true)
+    Promise.allSettled([
+      getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }),
+      getAudit().then(setAudit),
+    ]).finally(() => setTimeout(() => setRefreshing(false), 400))
   }, [])
+
+  // Keyboard shortcut: R refreshes state + audit (ignored while typing in a field)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'r' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable) return
+      e.preventDefault()
+      refresh()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [refresh])
 
   useEffect(() => {
     refresh()
     let es: EventSource | null = null
     let retry: ReturnType<typeof setTimeout> | null = null
+    let lastEventAt = Date.now()
     const connect = () => {
+      es?.close()
+      setConnection((prev) => (prev === 'live' ? prev : 'connecting'))
       es = new EventSource('/api/events')
+      lastEventAt = Date.now()
       es.onopen = () => {
-        setConnected(true)
+        setConnection('live')
         refresh()
       }
       es.onerror = () => {
-        setConnected(false)
-        es?.close()
+        setConnection('down')
+        // onerror can fire repeatedly — detach handlers and coalesce into ONE retry
+        if (es) { es.onerror = null; es.onopen = null; es.onmessage = null; es.close(); es = null }
+        if (retry) clearTimeout(retry)
         retry = setTimeout(connect, 3000)
       }
       es.onmessage = (ev) => {
+        lastEventAt = Date.now()
+        setConnection('live')
         const { type, data } = JSON.parse(ev.data)
         if (type === 'state') getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }).catch(() => {})
         if (type === 'audit') getAudit().then(setAudit).catch(() => {})
@@ -88,10 +116,21 @@ function Dashboard() {
     }
     connect()
     const interval = setInterval(refresh, 15000)
+    // Watchdog: the server sends a 'ping' event every 25s — if nothing arrived for 60s
+    // the stream is silently dead (sleep/wake, proxy drop): force a reconnect.
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastEventAt > 60000) {
+        setConnection('down')
+        if (retry) clearTimeout(retry)
+        if (es) { es.onerror = null; es.onopen = null; es.onmessage = null; es.close(); es = null }
+        connect()
+      }
+    }, 10000)
     return () => {
       es?.close()
       if (retry) clearTimeout(retry)
       clearInterval(interval)
+      clearInterval(watchdog)
     }
   }, [refresh])
 
@@ -126,6 +165,10 @@ function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {refreshing && <RotateCw className="size-3.5 animate-spin text-muted-foreground" />}
+            <Button variant="outline" size="sm" onClick={() => setEnvOpen(true)} title="Environment variables inherited by managed processes">
+              <SquareTerminal className="size-3.5" /> env
+            </Button>
             <AlarmsBell
               onOpenLog={(app, proc, ts) => {
                 dockRef.current?.open(app, proc)
@@ -134,12 +177,18 @@ function Dashboard() {
             />
             <Badge
               variant="outline"
-              className={connected
-                ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-                : 'border-red-500/40 text-red-600 dark:text-red-400'}
+              className={
+                connection === 'live'
+                  ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+                  : connection === 'connecting'
+                    ? 'animate-pulse border-amber-500/40 text-amber-600 dark:text-amber-400'
+                    : 'border-red-500/40 text-red-600 dark:text-red-400'
+              }
             >
-              <span className={`mr-1 size-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-red-500'}`} />
-              {connected ? 'live' : 'disconnected'}
+              <span className={`mr-1 size-1.5 rounded-full ${
+                connection === 'live' ? 'bg-emerald-500' : connection === 'connecting' ? 'bg-amber-500' : 'bg-red-500'
+              }`} />
+              {connection === 'live' ? 'live' : connection === 'connecting' ? '…' : 'disconnected'}
             </Badge>
             <ThemeToggle />
             <Button size="sm" onClick={() => { setEditApp(null); setFormOpen(true) }}>
@@ -209,6 +258,7 @@ function Dashboard() {
         editApp={editApp}
         onSaved={refresh}
       />
+      <EnvModal open={envOpen} onOpenChange={setEnvOpen} />
     </div>
   )
 }

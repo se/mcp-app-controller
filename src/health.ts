@@ -14,8 +14,27 @@ export function hasHealthCheck(p: ProcessDef): boolean {
 export class HealthMonitor {
   private map = new Map<string, HealthStatus>();
   private timer?: NodeJS.Timeout;
+  /** First-healthy moment per process for its CURRENT run (keyed to startedAt). */
+  private readyAt = new Map<string, { since: number; at: number }>();
 
   constructor(private config: ConfigStore, private pm: ProcessManager) {}
+
+  /** Record the first healthy observation for the process's current run. */
+  private markHealthy(app: string, proc: string): void {
+    const st = this.pm.getState(app, proc);
+    if (st.status !== 'running' || !st.startedAt) return;
+    const key = `${app}/${proc}`;
+    const cur = this.readyAt.get(key);
+    if (!cur || cur.since !== st.startedAt) this.readyAt.set(key, { since: st.startedAt, at: Date.now() });
+  }
+
+  /** How long the current run took to become healthy (ms), or null if unknown/not applicable. */
+  getReadyMs(app: string, proc: string): number | null {
+    const st = this.pm.getState(app, proc);
+    if (st.status !== 'running' || !st.startedAt) return null;
+    const e = this.readyAt.get(`${app}/${proc}`);
+    return e && e.since === st.startedAt ? Math.max(0, e.at - st.startedAt) : null;
+  }
 
   start(intervalMs = 5000): void {
     this.timer = setInterval(() => void this.tick(), intervalMs);
@@ -45,6 +64,7 @@ export class HealthMonitor {
         }
         const ok = await this.check(p);
         const next: HealthStatus = ok ? 'healthy' : 'unhealthy';
+        if (ok) this.markHealthy(app.name, p.name);
         if (this.map.get(key) !== next) {
           this.map.set(key, next);
           bus.emit('state');
@@ -85,6 +105,7 @@ export class HealthMonitor {
     while (Date.now() - start < timeoutMs) {
       if (!this.pm.isRunning(app, proc)) return false;
       if (await this.check(def)) {
+        this.markHealthy(app, proc);
         if (this.map.get(key) !== 'healthy') {
           this.map.set(key, 'healthy');
           bus.emit('state');

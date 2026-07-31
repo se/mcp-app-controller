@@ -128,10 +128,6 @@
     @apply font-sans;
     }
 }
-::highlight(log-match) {
-    background-color: rgb(250 204 21 / 0.35);
-}
-::highlight(log-match-current) {
-    background-color: rgb(250 204 21);
-    color: black;
-}
+/* Note: the ::highlight(log-match) rules for the log-search Custom Highlight API are
+   injected at runtime in main.tsx — lightningcss doesn't know the pseudo-element yet
+   and warned on every build when they lived here. */

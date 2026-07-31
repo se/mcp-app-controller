@@ -25,6 +25,13 @@ apps:
   - name: my-backend
     description: Example multi-process app
     cwd: /path/to/my-backend
+    # Optional build-once step: run to completion BEFORE any operation that starts
+    # 2+ processes of this app (whole-app start/restart, profile start, boot restore).
+    # Serializes an expensive shared build instead of every process compiling the
+    # same projects concurrently. Single-process starts skip it.
+    prepare: dotnet build MyBackend.sln
+    prepareTimeoutMs: 600000            # optional, default 10 min
+    staggerMs: 1000                     # optional pause between process starts (ms)
     processes:
       - name: api
         command: dotnet run --project src/Api/

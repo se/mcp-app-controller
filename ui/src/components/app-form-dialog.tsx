@@ -47,6 +47,8 @@ export function AppFormDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [cwd, setCwd] = useState('')
+  const [prepare, setPrepare] = useState('')
+  const [staggerMs, setStaggerMs] = useState('')
   const [procs, setProcs] = useState<ProcForm[]>([{ ...emptyProc }])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -58,6 +60,8 @@ export function AppFormDialog({
       setName(editApp.name)
       setDescription(editApp.description)
       setCwd(editApp.cwd)
+      setPrepare(editApp.prepare ?? '')
+      setStaggerMs(editApp.staggerMs > 0 ? String(editApp.staggerMs) : '')
       setProcs(
         editApp.processes.map((p) => ({
           name: p.name,
@@ -77,6 +81,8 @@ export function AppFormDialog({
       setName('')
       setDescription('')
       setCwd('')
+      setPrepare('')
+      setStaggerMs('')
       setProcs([{ ...emptyProc }])
     }
   }, [open, editApp])
@@ -92,6 +98,16 @@ export function AppFormDialog({
       name: name.trim(),
       description: description.trim(),
       cwd: cwd.trim(),
+      // Preserve fields this dialog doesn't manage (saved def replaces the whole app)
+      ...(editApp
+        ? {
+            env: editApp.env,
+            environments: editApp.environments,
+            ...(editApp.activeEnvironment ? { activeEnvironment: editApp.activeEnvironment } : {}),
+          }
+        : {}),
+      ...(prepare.trim() ? { prepare: prepare.trim() } : {}),
+      ...(Number(staggerMs) > 0 ? { staggerMs: Number(staggerMs) } : {}),
       processes: procs.map((p) => ({
         name: p.name.trim(),
         command: p.command.trim(),
@@ -144,6 +160,18 @@ export function AppFormDialog({
             <Label htmlFor="app-cwd">Working directory</Label>
             <Input id="app-cwd" value={cwd} onChange={(e) => setCwd(e.target.value)}
               placeholder="/path/to/my-app" className="font-mono text-xs" />
+          </div>
+          <div className="grid grid-cols-[1fr_120px] gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="app-prepare">Prepare command (optional)</Label>
+              <Input id="app-prepare" value={prepare} onChange={(e) => setPrepare(e.target.value)}
+                placeholder="dotnet build Shared.sln — build-once before starting 2+ processes" className="font-mono text-xs" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="app-stagger">Stagger (ms)</Label>
+              <Input id="app-stagger" value={staggerMs} onChange={(e) => setStaggerMs(e.target.value)}
+                placeholder="0" inputMode="numeric" className="text-xs" />
+            </div>
           </div>
 
           <Separator />

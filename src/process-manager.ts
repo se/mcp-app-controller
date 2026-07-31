@@ -112,21 +112,58 @@ export class ProcessManager {
   }
 
   /**
+   * Kill leftover processes of previous generations of THIS process: anything whose
+   * executable lives under the process's own build output (<procCwd>/…/bin/…).
+   * Catches zombies that are still BOOTING (not yet listening), which a port check
+   * cannot see — they would otherwise win the bind race against the new instance.
+   */
+  private async killBinOrphans(procCwd: string, key: string): Promise<void> {
+    try {
+      const { stdout } = await execFileP('ps', ['-axo', 'pid=,pgid=,args=']);
+      for (const line of stdout.split('\n')) {
+        const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+        if (!m) continue;
+        const exe = m[3].split(' ')[0];
+        // Only dotnet build output (bin/Debug|Release) — NOT node_modules/.bin etc.,
+        // so sibling processes sharing the cwd (vue dev servers) are never touched.
+        if (!exe.startsWith(`${procCwd}/`) || !/\/bin\/(Debug|Release)\//.test(exe)) continue;
+        const pid = Number(m[1]);
+        const pgid = Number(m[2]);
+        if (pid === process.pid) continue;
+        this.appendLog(key, `--- [controller] killing orphaned previous-generation process ${pid} (${exe.slice(0, 120)})`);
+        try { process.kill(-pgid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+      }
+    } catch {
+      // best effort — ps may be unavailable
+    }
+  }
+
+  /**
    * Fail fast if a declared port is already bound. If the holder is an orphan of a
-   * previous run of THIS process (recorded pid/pgid), reclaim it and continue.
+   * previous run of THIS process — matched by recorded pid/pgid, OR by its command
+   * path living under the process's working directory (an unrecorded orphan, e.g.
+   * one that survived a daemon crash) — reclaim it and continue.
    * With takeover=true, a FOREIGN holder (started outside the controller) is also
    * stopped so the process can run under controller management instead.
    */
   private async ensurePortsFree(
-    app: string, procDef: ProcessDef, key: string, takeover: boolean, session: string, source: string
+    appDef: AppDef, procDef: ProcessDef, key: string, takeover: boolean, session: string, source: string
   ): Promise<void> {
+    const app = appDef.name;
     const recorded = this.store.listRunning().find((r) => r.app === app && r.proc === procDef.name);
+    const procCwd = procDef.cwd ? path.resolve(appDef.cwd, procDef.cwd) : appDef.cwd;
+    // Sweep booting zombies of previous generations before the port checks.
+    await this.killBinOrphans(procCwd, key);
     for (const port of declaredPorts(procDef)) {
       if (!(await isPortInUse(port))) continue;
       const holder = await portHolder(port);
-      if (holder && recorded?.pid && (holder.pid === recorded.pid || holder.pgid === recorded.pid)) {
-        this.appendLog(key, `--- [controller] port ${port} held by orphaned previous run (pid ${holder.pid}) — reclaiming`);
-        if (await this.killPortHolder(holder, port)) continue;
+      const isRecordedOrphan = holder && recorded?.pid && (holder.pid === recorded.pid || holder.pgid === recorded.pid);
+      // Unrecorded orphan: the holder's command runs a binary/script inside this
+      // process's own working directory — clearly a leftover of this process.
+      const isPathOrphan = holder && !isRecordedOrphan && holder.command.includes(`${procCwd}/`);
+      if (isRecordedOrphan || isPathOrphan) {
+        this.appendLog(key, `--- [controller] port ${port} held by orphaned previous run (pid ${holder!.pid}${isPathOrphan ? ', matched by path' : ''}) — reclaiming`);
+        if (await this.killPortHolder(holder!, port)) continue;
       } else if (holder && takeover) {
         this.appendLog(key, `--- [controller] taking over port ${port}: stopping pid ${holder.pid} (${holder.command})`);
         this.store.audit({
@@ -186,7 +223,7 @@ export class ProcessManager {
       throw new Error(`Working directory does not exist: ${cwd}`);
     }
 
-    await this.ensurePortsFree(appDef.name, procDef, key, takeover, session, source);
+    await this.ensurePortsFree(appDef, procDef, key, takeover, session, source);
 
     this.appendLog(key, `--- [controller] starting (mode=${mode}, by=${session}): ${command}`);
     const child = spawn(command, {
@@ -273,10 +310,62 @@ export class ProcessManager {
       }
     });
 
-    // Give the process a beat to fail fast (bad command, missing dir, etc.)
-    await new Promise((r) => setTimeout(r, 400));
+    // Fail-fast window: give the process up to 400ms to die instantly (bad command,
+    // missing dir, port bind crash) so the caller sees 'crashed' instead of a false
+    // 'running'. Racing against the exit means an instant failure resolves immediately.
+    await Promise.race([exitPromise, sleep(400)]);
     bus.emit('state');
     return this.getState(appDef.name, procDef.name);
+  }
+
+  /**
+   * Run a one-shot command (e.g. an app's `prepare` build) to completion in the app
+   * cwd with the same env layering as managed processes. Output goes to the log of
+   * pseudo-process '<app>/<name>' (viewable via app_logs). Throws on non-zero exit
+   * or timeout (the whole process group is killed on timeout).
+   */
+  async runToCompletion(appDef: AppDef, name: string, command: string, timeoutMs: number): Promise<void> {
+    const key = procKey(appDef.name, name);
+    this.appendLog(key, `--- [controller] running (one-shot): ${command}`);
+    const child = spawn(command, {
+      shell: true,
+      cwd: appDef.cwd,
+      env: {
+        ...process.env,
+        ...this.baseEnv,
+        ...appDef.env,
+        ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
+        FORCE_COLOR: '1',
+        CLICOLOR_FORCE: '1',
+      },
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    for (const stream of [child.stdout, child.stderr]) {
+      if (!stream) continue;
+      const rl = readline.createInterface({ input: stream });
+      rl.on('line', (line) => this.appendLog(key, line));
+    }
+    const exit = await new Promise<{ code: number | null; timedOut: boolean }>((resolve) => {
+      const timer = setTimeout(() => {
+        this.appendLog(key, `--- [controller] one-shot timed out after ${timeoutMs}ms — killing`);
+        const pid = child.pid;
+        if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } }
+        resolve({ code: null, timedOut: true });
+      }, timeoutMs);
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        this.appendLog(key, `--- [controller] one-shot spawn error: ${err.message}`);
+        resolve({ code: -1, timedOut: false });
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        resolve({ code, timedOut: false });
+      });
+    });
+    this.appendLog(key, `--- [controller] one-shot finished (code=${exit.code}${exit.timedOut ? ', timed out' : ''})`);
+    if (exit.timedOut) throw new Error(`'${name}' command timed out after ${Math.round(timeoutMs / 1000)}s`);
+    if (exit.code !== 0) throw new Error(`'${name}' command failed with exit code ${exit.code} (see logs of '${key}')`);
   }
 
   async stop(app: string, proc: string, gracefulMs = 6000, clearRestore = true): Promise<ProcState> {

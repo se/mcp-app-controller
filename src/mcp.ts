@@ -169,7 +169,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
     },
     async ({ app, process: proc, lines }) => {
       const appDef = controller.requireApp(app);
-      const procs = controller.selectProcesses(appDef, proc);
+      const procs = controller.selectLogProcesses(appDef, proc);
       const out = procs.map((p) => {
         const logs = controller.pm.readLogs(app, p.name, lines, true);
         return `=== ${app}/${p.name} (last ${lines} lines) ===\n${logs || '(no logs yet)'}`;
@@ -269,7 +269,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
     },
     async ({ app, process: proc, pattern, timeout_seconds, lookback_lines }) => {
       const appDef = controller.requireApp(app);
-      const procs = controller.selectProcesses(appDef, proc);
+      const procs = controller.selectLogProcesses(appDef, proc);
       if (procs.length !== 1) {
         return text(`App '${app}' has multiple processes (${procs.map((p) => p.name).join(', ')}) — specify one with the 'process' parameter.`);
       }
@@ -502,6 +502,9 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         name: z.string(),
         description: z.string().default(''),
         cwd: z.string().describe('Absolute path to the app root directory'),
+        prepare: z.string().optional().describe('Optional build-once command run to completion before every start/restart of this app (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
+        prepareTimeoutMs: z.number().int().optional().describe('Timeout for the prepare command in ms (default 600000)'),
+        staggerMs: z.number().int().optional().describe('Pause between process starts in a multi-process operation (default 0)'),
         processes: z
           .array(
             z.object({
