@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { appActionWithTakeover, getLogs, getLogsAround, getState, type ProcInfo } from '@/lib/api'
 import { anchorBus, logBus, stateBus, type LogAnchor } from '@/lib/log-bus'
 import { cn } from '@/lib/utils'
-import { ChevronDown, ChevronUp, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Copy, Play, RotateCw, Square, Trash2, Wrench } from 'lucide-react'
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -49,6 +49,7 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
   const [filterMode, setFilterMode] = useState(true)
   const [matchIdx, setMatchIdx] = useState(0)
   const [matchCount, setMatchCount] = useState(0)
+  const [copied, setCopied] = useState<'screen' | 'all' | null>(null)
   const rangesRef = useRef<Range[]>([])
   const bodyRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(follow)
@@ -255,6 +256,22 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app, proc, lines])
 
+  // 'screen' copies what is rendered (search filter applied), 'all' copies the whole
+  // in-memory buffer. Both strip ANSI and honour the timestamps toggle.
+  const copy = async (what: 'screen' | 'all') => {
+    const src = what === 'all' ? lines : visible
+    const text = src
+      .map((l) => (hideTs ? stripAnsi(l).replace(TS_PREFIX_RE, '') : stripAnsi(l)))
+      .join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(what)
+      setTimeout(() => setCopied(null), 1500)
+    } catch (err) {
+      alert(`copy failed: ${(err as Error).message}`)
+    }
+  }
+
   const gotoMatch = (dir: 1 | -1) => {
     if (matchCount === 0) return
     setFollow(false)
@@ -387,6 +404,32 @@ export function LogViewPanel({ params }: IDockviewPanelProps<{ app: string; proc
             <Label htmlFor={`follow-${app}-${proc}`} className="text-[11px] text-muted-foreground">
               follow
             </Label>
+          </div>
+          <div className="flex items-center gap-0.5">
+            {copied ? (
+              <Check className="size-3 text-emerald-500" />
+            ) : (
+              <Copy className="size-3 text-muted-foreground" />
+            )}
+            <button
+              title="Copy the lines currently shown (search filter applied)"
+              onClick={() => copy('screen')}
+              className={`rounded px-1 py-0.5 text-[11px] transition-colors hover:bg-accent ${
+                copied === 'screen' ? 'text-emerald-500' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              screen
+            </button>
+            <span className="text-[11px] text-muted-foreground/40">/</span>
+            <button
+              title={`Copy all buffered lines (${lines.length})`}
+              onClick={() => copy('all')}
+              className={`rounded px-1 py-0.5 text-[11px] transition-colors hover:bg-accent ${
+                copied === 'all' ? 'text-emerald-500' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              all
+            </button>
           </div>
           <Button
             variant="ghost"

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { getAudit, getState, loadPref, savePref, type AppInfo, type AuditEntry } from '@/lib/api'
 import { alarmsBus, anchorBus, logBus, stateBus } from '@/lib/log-bus'
 import { ThemeProvider } from '@/lib/theme'
+import { cn } from '@/lib/utils'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppCard } from '@/components/app-card'
 import { AppView } from '@/components/app-view'
@@ -175,20 +176,31 @@ function Dashboard() {
                 if (ts) anchorBus.emit({ app, proc, ts })
               }}
             />
+            {/* Fixed width: label length varies (live / connecting / disconnected) and a
+                shrinking badge would shift the whole header row on every state change. */}
             <Badge
               variant="outline"
-              className={
+              title={
+                connection === 'live'
+                  ? 'connected — receiving live updates'
+                  : connection === 'connecting'
+                    ? 'connecting to the daemon…'
+                    : 'disconnected — retrying every 3s'
+              }
+              className={cn(
+                'w-16 justify-start',
                 connection === 'live'
                   ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
                   : connection === 'connecting'
                     ? 'animate-pulse border-amber-500/40 text-amber-600 dark:text-amber-400'
                     : 'border-red-500/40 text-red-600 dark:text-red-400'
-              }
+              )}
             >
-              <span className={`mr-1 size-1.5 rounded-full ${
+              <span className={cn(
+                'mr-1 size-1.5 shrink-0 rounded-full',
                 connection === 'live' ? 'bg-emerald-500' : connection === 'connecting' ? 'bg-amber-500' : 'bg-red-500'
-              }`} />
-              {connection === 'live' ? 'live' : connection === 'connecting' ? '…' : 'disconnected'}
+              )} />
+              {connection === 'live' ? 'live' : connection === 'connecting' ? '…' : 'down'}
             </Badge>
             <ThemeToggle />
             <Button size="sm" onClick={() => { setEditApp(null); setFormOpen(true) }}>
