@@ -112,24 +112,42 @@ export class ProcessManager {
   }
 
   /**
+   * Group leaders (pgid = spawn pid) of processes this daemon currently manages,
+   * mapped to their "app/proc" key. Anything in here is a live SIBLING, never an
+   * orphan — no reclaim/sweep logic may touch these groups.
+   */
+  private managedGroups(): Map<number, string> {
+    const map = new Map<number, string>();
+    for (const [key, entry] of this.runtime) {
+      if (entry.child.pid && !entry.exited) map.set(entry.child.pid, key);
+    }
+    return map;
+  }
+
+  /**
    * Kill leftover processes of previous generations of THIS process: anything whose
    * executable lives under the process's own build output (<procCwd>/…/bin/…).
    * Catches zombies that are still BOOTING (not yet listening), which a port check
    * cannot see — they would otherwise win the bind race against the new instance.
+   * Processes belonging to currently-managed groups are NEVER touched: siblings of
+   * the same app often share the cwd (e.g. monorepo dotnet projects under one root).
    */
-  private async killBinOrphans(procCwd: string, key: string): Promise<void> {
+  private async killBinOrphans(procCwd: string, key: string, managed: Map<number, string>): Promise<void> {
     try {
       const { stdout } = await execFileP('ps', ['-axo', 'pid=,pgid=,args=']);
       for (const line of stdout.split('\n')) {
         const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
         if (!m) continue;
         const exe = m[3].split(' ')[0];
-        // Only dotnet build output (bin/Debug|Release) — NOT node_modules/.bin etc.,
-        // so sibling processes sharing the cwd (vue dev servers) are never touched.
         if (!exe.startsWith(`${procCwd}/`) || !/\/bin\/(Debug|Release)\//.test(exe)) continue;
         const pid = Number(m[1]);
         const pgid = Number(m[2]);
         if (pid === process.pid) continue;
+        const owner = managed.get(pgid) ?? managed.get(pid);
+        if (owner) {
+          if (owner !== key) this.appendLog(key, `--- [controller] pid ${pid} belongs to managed sibling '${owner}' — leaving it alone`);
+          continue;
+        }
         this.appendLog(key, `--- [controller] killing orphaned previous-generation process ${pid} (${exe.slice(0, 120)})`);
         try { process.kill(-pgid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
       }
@@ -152,11 +170,21 @@ export class ProcessManager {
     const app = appDef.name;
     const recorded = this.store.listRunning().find((r) => r.app === app && r.proc === procDef.name);
     const procCwd = procDef.cwd ? path.resolve(appDef.cwd, procDef.cwd) : appDef.cwd;
+    const managed = this.managedGroups();
     // Sweep booting zombies of previous generations before the port checks.
-    await this.killBinOrphans(procCwd, key);
+    await this.killBinOrphans(procCwd, key, managed);
     for (const port of declaredPorts(procDef)) {
       if (!(await isPortInUse(port))) continue;
       const holder = await portHolder(port);
+      // A currently-managed sibling is never an orphan and never a takeover target:
+      // killing it here is exactly the "start A kills B" bug. Surface a config error.
+      const ownedBy = holder ? managed.get(holder.pgid) ?? managed.get(holder.pid) : undefined;
+      if (ownedBy && ownedBy !== key) {
+        throw new Error(
+          `Port ${port} is bound by managed process '${ownedBy}' — refusing to touch it. ` +
+          `If both processes really declare port ${port}, fix the port lists; otherwise stop '${ownedBy}' first.`
+        );
+      }
       const isRecordedOrphan = holder && recorded?.pid && (holder.pid === recorded.pid || holder.pgid === recorded.pid);
       // Unrecorded orphan: the holder's command runs a binary/script inside this
       // process's own working directory — clearly a leftover of this process.
