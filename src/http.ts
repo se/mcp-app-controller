@@ -256,20 +256,21 @@ export function createHttpServer(controller: Controller) {
     for (const [k, v] of Object.entries(controller.pm.baseEnv)) {
       vars[k] = !reveal && sensitive.test(k) ? '••••••••' : v;
     }
-    res.json({ shell: controller.config.envShell ?? null, vars });
+    res.json({ shell: controller.config.envShell ?? null, effectiveShell: controller.pm.baseEnvShell ?? null, vars });
   });
 
   // Re-run the login shell and swap in its current environment — no daemon restart
   // needed after editing shell config. Applies to processes started AFTER this call.
   api.post('/daemon/env/recapture', async (_req, res) => {
-    const shell = controller.config.envShell;
-    if (!shell) {
-      res.status(400).json({ error: 'No envShell configured in apps.yaml — nothing to re-capture.' });
+    if (controller.config.envShell === 'none') {
+      res.status(400).json({ error: 'envShell is set to "none" in apps.yaml — capture is disabled.' });
       return;
     }
     try {
-      const { captureShellEnv } = await import('./env.js');
+      const { captureShellEnv, defaultShell } = await import('./env.js');
+      const shell = controller.config.envShell || defaultShell();
       controller.pm.baseEnv = await captureShellEnv(shell);
+      controller.pm.baseEnvShell = shell;
       controller.store.audit({
         session: 'ui', source: 'ui', action: 'env-recapture', app: '*',
         detail: `re-captured login environment from ${shell}`, result: `${Object.keys(controller.pm.baseEnv).length} vars`,

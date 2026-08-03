@@ -106,20 +106,26 @@ after a bootout — just re-run the script.
 
 ### App environment (`envShell`)
 
-Managed apps need your environment variables, but *which shell loads them* is a classic trap:
-launchd knows only your **registered** default shell (`chsh`), and zsh/bash don't read their
-interactive rc files (`~/.zshrc`) in non-interactive login mode. If your env lives in, say,
-fish config while the machine's default shell is zsh, set it explicitly in `apps.yaml`:
+Managed apps need your environment variables, but daemons launched by launchd/GUI never
+source your shell config. The daemon therefore captures your shell environment at startup
+(and on config reload) and injects it into every managed process.
+
+By default it uses **your own shell** (`$SHELL`, falling back to your passwd entry). zsh and
+bash are run as login **and** interactive shells (`-ilc`), so both `~/.zprofile` *and*
+`~/.zshrc` (or `~/.bash_profile`) are sourced; fish sources `config.fish` on any invocation.
+No configuration needed for the common case.
+
+To capture from a different shell than your default (e.g. your env lives in fish config
+while `chsh` says zsh), set it explicitly in `apps.yaml`:
 
 ```yaml
-envShell: /opt/homebrew/bin/fish
+envShell: /opt/homebrew/bin/fish   # or `none` to disable capture entirely
 ```
 
-At startup (and on config reload) the daemon runs `<envShell> -l -c env`, captures everything
-that shell's login config exports, and injects it into every managed process — regardless of
-what launchd or `chsh` say. Configurable from the dashboard's **Settings** page (which also
-shows how many variables were captured), along with crash notifications and profiles. The daemon log prints how many variables were captured. Per-process
-`env:` entries in `apps.yaml` still override captured values.
+Configurable from the dashboard's **Settings** page (which also shows how many variables
+were captured), along with crash notifications and profiles. The daemon log prints how many
+variables were captured. Per-process `env:` entries in `apps.yaml` still override captured
+values, as do app-wide `env:` and the active environment set via `set_environment`.
 
 ### Health checks
 

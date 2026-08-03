@@ -98,8 +98,10 @@ async function portHolder(port: number): Promise<{ pid: number; pgid: number; co
 export class ProcessManager {
   private runtime = new Map<string, RuntimeEntry>();
   private lastExit = new Map<string, { code: number | null; signal: string | null; at: number; summary?: string }>();
-  /** Environment captured from the configured envShell, injected into every managed process. */
+  /** Environment captured from the shell (configured envShell or the user's own), injected into every managed process. */
   baseEnv: Record<string, string> = {};
+  /** Shell the current baseEnv was captured from (null until first successful capture). */
+  baseEnvShell: string | null = null;
 
   constructor(private logsDir: string, private store: Store) {}
 

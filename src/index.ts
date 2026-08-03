@@ -8,7 +8,7 @@ import { ProcessManager } from './process-manager.js';
 import { Controller } from './controller.js';
 import { HealthMonitor } from './health.js';
 import { MetricsMonitor } from './metrics.js';
-import { captureShellEnv } from './env.js';
+import { captureShellEnv, defaultShell } from './env.js';
 import { startNotifier } from './notify.js';
 import { TriggerEngine } from './triggers.js';
 import { restoreOnBoot } from './restore.js';
@@ -53,15 +53,18 @@ startNotifier(config);
 const triggerEngine = new TriggerEngine(config, store);
 triggerEngine.start();
 
-// Managed apps inherit the login environment of the configured shell (apps.yaml envShell),
-// independent of the user's registered default shell.
+// Managed apps inherit the shell environment (.zprofile/.zshrc, .bash_profile,
+// config.fish, ...). apps.yaml envShell overrides which shell is used; when unset
+// we fall back to the user's own shell. `envShell: none` disables capture.
 async function refreshBaseEnv(): Promise<void> {
-  if (!config.envShell) return;
+  if (config.envShell === 'none') return;
+  const shell = config.envShell || defaultShell();
   try {
-    pm.baseEnv = await captureShellEnv(config.envShell);
-    console.log(`[env] captured ${Object.keys(pm.baseEnv).length} variables from ${config.envShell} (login shell)`);
+    pm.baseEnv = await captureShellEnv(shell);
+    pm.baseEnvShell = shell;
+    console.log(`[env] captured ${Object.keys(pm.baseEnv).length} variables from ${shell}${config.envShell ? '' : ' (auto-detected)'}`);
   } catch (err: any) {
-    console.error(`[env] failed to capture environment from '${config.envShell}': ${err.message}`);
+    console.error(`[env] failed to capture environment from '${shell}': ${err.message} — apps inherit the daemon env only`);
   }
 }
 config.onReload = () => {
