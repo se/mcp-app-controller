@@ -112,13 +112,23 @@ function Dashboard() {
   }, [apps, pinned])
 
   const [refreshing, setRefreshing] = useState(false)
+  const lastRefreshAt = useRef(0)
   const refresh = useCallback(() => {
+    lastRefreshAt.current = Date.now()
     setRefreshing(true)
     Promise.allSettled([
       getState().then((s) => { setApps(s.apps); setProfiles(s.profiles ?? {}); stateBus.emit(s.apps) }),
       getAudit().then(setAudit),
     ]).finally(() => setTimeout(() => setRefreshing(false), 400))
   }, [])
+
+  // For triggers that can coincide (mount + SSE onopen, onopen + 15s interval after a
+  // reconnect): skip the fetch when an identical one just ran. Explicit user actions
+  // (R key, buttons) keep calling refresh() directly and are never skipped.
+  const refreshIfStale = useCallback((maxAgeMs = 5000) => {
+    if (Date.now() - lastRefreshAt.current < maxAgeMs) return
+    refresh()
+  }, [refresh])
 
   // Keyboard shortcut: R refreshes state + audit (ignored while typing in a field)
   useEffect(() => {
@@ -145,7 +155,7 @@ function Dashboard() {
       lastEventAt = Date.now()
       es.onopen = () => {
         setConnection('live')
-        refresh()
+        refreshIfStale() // resync after a real reconnect; no-op right after mount/interval
       }
       es.onerror = () => {
         setConnection('down')
@@ -163,17 +173,31 @@ function Dashboard() {
         if (type === 'log') logBus.emit(data)
         if (type === 'alarm') alarmsBus.emit()
         if (type === 'metrics') {
-          setApps((prev) =>
-            prev.map((a) => ({
-              ...a,
-              processes: a.processes.map((p) => ({ ...p, metrics: data[`${a.name}/${p.name}`] ?? null })),
-            }))
-          )
+          // Preserve referential equality when nothing displayed actually changed:
+          // unchanged proc → same object, unchanged app → same object, nothing
+          // changed at all → same array (React bails out of the re-render entirely).
+          // `at` is deliberately ignored — it differs every tick but is not rendered.
+          setApps((prev) => {
+            let anyAppChanged = false
+            const next = prev.map((a) => {
+              let anyProcChanged = false
+              const processes = a.processes.map((p) => {
+                const m = (data[`${a.name}/${p.name}`] ?? null) as { cpu: number; memMb: number; at: number } | null
+                if (p.metrics === m || (p.metrics && m && p.metrics.cpu === m.cpu && p.metrics.memMb === m.memMb)) return p
+                anyProcChanged = true
+                return { ...p, metrics: m }
+              })
+              if (!anyProcChanged) return a
+              anyAppChanged = true
+              return { ...a, processes }
+            })
+            return anyAppChanged ? next : prev
+          })
         }
       }
     }
     connect()
-    const interval = setInterval(refresh, 15000)
+    const interval = setInterval(() => refreshIfStale(), 15000)
     // Watchdog: the server sends a 'ping' event every 25s — if nothing arrived for 60s
     // the stream is silently dead (sleep/wake, proxy drop): force a reconnect.
     const watchdog = setInterval(() => {
@@ -190,7 +214,7 @@ function Dashboard() {
       clearInterval(interval)
       clearInterval(watchdog)
     }
-  }, [refresh])
+  }, [refresh, refreshIfStale])
 
   const openApp = (name: string) => setView(`app:${name}`)
   const viewedApp = view.startsWith('app:') ? apps.find((a) => a.name === view.slice(4)) : undefined

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, fmtUptime, getLogs, isStarting, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
+import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, getLogs, isStarting, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
+import { Elapsed, Uptime } from '@/components/uptime'
 import { logBus } from '@/lib/log-bus'
 import { ChevronDown, ChevronRight, Eraser, FileText, Lock, Pencil, Pin, Play, RotateCw, Square, Timer, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -20,7 +21,7 @@ function ProcTooltipContent({ p }: { p: ProcInfo }) {
         {p.health ? ` · ${p.health}` : ''}
       </div>
       {p.status === 'running' && (
-        <div>pid {p.pid} · up {fmtUptime(p.startedAt!)}</div>
+        <div>pid {p.pid} · up <Uptime startedAt={p.startedAt!} /></div>
       )}
       {p.metrics && <div>cpu {p.metrics.cpu}% · mem {p.metrics.memMb} MB</div>}
       {p.status === 'crashed' && (
@@ -100,7 +101,7 @@ function StatusDot({ p }: { p: ProcInfo }) {
   )
 }
 
-export function AppCard({
+function AppCardInner({
   app,
   pinned,
   collapsed,
@@ -358,11 +359,11 @@ export function AppCard({
               </span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
-                {p.status === 'running' ? fmtUptime(p.startedAt!) : '—'}
+                {p.status === 'running' ? <Uptime startedAt={p.startedAt!} /> : '—'}
               </span>
               <span className="text-right font-mono text-[11px] tabular-nums">
                 {isStarting(p) ? (
-                  <span className="animate-pulse text-sky-600 dark:text-sky-400">{fmtElapsed(Date.now() - p.startedAt!)}…</span>
+                  <span className="animate-pulse text-sky-600 dark:text-sky-400"><Elapsed since={p.startedAt!} />…</span>
                 ) : p.readyInMs !== null ? (
                   <span className="text-muted-foreground">{fmtElapsed(p.readyInMs)}</span>
                 ) : (
@@ -471,3 +472,17 @@ export function AppCard({
     </Card>
   )
 }
+
+/**
+ * Memoized on data props only. The dashboard re-creates the callback props on every
+ * render, so comparing them would defeat the memo — and they are all "stale-safe":
+ * they capture only stable refs/setters (functional updates) or values that, when
+ * they change, also change one of the compared props (`app`, `pinned`, `collapsed`)
+ * and thus produce a fresh render with fresh closures. Keep new callbacks that way.
+ * Combined with the referential-equality guard in the metrics SSE handler, a 5s
+ * metrics tick only re-renders cards whose cpu/mem actually changed.
+ */
+export const AppCard = memo(
+  AppCardInner,
+  (prev, next) => prev.app === next.app && prev.pinned === next.pinned && prev.collapsed === next.collapsed
+)

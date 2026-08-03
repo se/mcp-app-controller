@@ -14,7 +14,6 @@ import {
   appActionWithTakeover,
   fmtAgo,
   fmtElapsed,
-  fmtUptime,
   getMetricsHistory,
   isStarting,
   releaseLease,
@@ -25,6 +24,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
+import { Elapsed, Uptime } from '@/components/uptime'
 import { Activity, ArrowLeft, Cpu, FileText, Hammer, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
@@ -287,7 +287,7 @@ export function AppView({
         <Card className="gap-1 p-4">
           <div className="flex items-center justify-between text-xs text-muted-foreground">Uptime <Activity className="size-3.5" /></div>
           <div className="text-2xl font-semibold tabular-nums">
-            {running.length > 0 ? fmtUptime(Math.min(...running.map((p) => p.startedAt!))) : '—'}
+            {running.length > 0 ? <Uptime startedAt={Math.min(...running.map((p) => p.startedAt!))} /> : '—'}
           </div>
           <div className="text-[11px] text-muted-foreground">oldest running process</div>
         </Card>
@@ -361,11 +361,11 @@ export function AppView({
                 </TableCell>
                 <TableCell>{statusBadge(p)}</TableCell>
                 <TableCell className="font-mono text-xs">{p.pid ?? '—'}</TableCell>
-                <TableCell className="text-xs">{p.status === 'running' ? fmtUptime(p.startedAt!) : '—'}</TableCell>
+                <TableCell className="text-xs">{p.status === 'running' ? <Uptime startedAt={p.startedAt!} /> : '—'}</TableCell>
                 <TableCell className="text-xs tabular-nums">
                   {isStarting(p) ? (
                     <span className="animate-pulse text-sky-600 dark:text-sky-400">
-                      {fmtElapsed(Date.now() - p.startedAt!)}…
+                      <Elapsed since={p.startedAt!} />…
                     </span>
                   ) : p.readyInMs !== null ? (
                     fmtElapsed(p.readyInMs)
