@@ -45,6 +45,7 @@ export const stripAnsiCodes = (s: string) => s.replace(ANSI_RE, '');
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isPidAlive(pid: number): boolean {
   try {
@@ -144,21 +145,56 @@ export class ProcessManager {
   }
 
   /**
-   * Kill leftover processes of previous generations of THIS process: anything whose
-   * executable lives under the process's own build output (<procCwd>/…/bin/…).
-   * Catches zombies that are still BOOTING (not yet listening), which a port check
-   * cannot see — they would otherwise win the bind race against the new instance.
-   * Processes belonging to currently-managed groups are NEVER touched: siblings of
-   * the same app often share the cwd (e.g. monorepo dotnet projects under one root).
+   * True if a command line's paths plausibly belong to THIS process rather than a
+   * sibling sharing (part of) the same cwd. Two disambiguators:
+   *  - a path under a sibling's MORE SPECIFIC cwd belongs to that sibling (e.g. a
+   *    vite dev server under <cwd>/app-vue while this proc runs from <cwd>);
+   *  - a dotnet build output <cwd>/<project>/bin/(Debug|Release)/… is ours only if
+   *    <project> is referenced by our own command/devCommand (src/MonoPam.App vs a
+   *    sibling's src/MonoPam.Gateway binary under the same monorepo root).
+   * Unknown → false is the safe direction: the process is left alone, and a real
+   * port conflict still surfaces as an explicit error instead of a silent kill.
    */
-  private async killBinOrphans(procCwd: string, key: string, managed: Map<number, string>): Promise<void> {
+  private ownsCommandPath(cmdline: string, appDef: AppDef, procDef: ProcessDef, procCwd: string): boolean {
+    for (const sib of appDef.processes) {
+      if (sib.name === procDef.name) continue;
+      const sibCwd = sib.cwd ? path.resolve(appDef.cwd, sib.cwd) : appDef.cwd;
+      if (sibCwd !== procCwd && sibCwd.startsWith(`${procCwd}/`) && cmdline.includes(`${sibCwd}/`)) return false;
+    }
+    const m = cmdline.match(new RegExp(`${escapeRe(procCwd)}/(?:(.+?)/)?bin/(?:Debug|Release)/`));
+    if (!m) return true; // not a build output — plain path under our own cwd
+    const relProject = m[1];
+    if (!relProject) return true; // procCwd itself is the project
+    const own = `${procDef.command}\n${procDef.devCommand ?? ''}`;
+    return own.includes(relProject) || own.includes(path.basename(relProject));
+  }
+
+  /**
+   * Kill leftover processes of previous generations of THIS process: anything running
+   * the process's own build output (<procCwd>/…/bin/(Debug|Release)/…), in either
+   * dotnet shape — apphost (argv0 is the built binary) or dll host (argv0 is `dotnet`,
+   * the bin path only appears in the args). Catches zombies that are still BOOTING
+   * (not yet listening), which a port check cannot see — they would otherwise win the
+   * bind race against the new instance. Vue/node dev servers never match (no
+   * bin/Debug|Release path); they bind immediately and are handled by port reclaim.
+   * NEVER touched: currently-managed groups (live siblings, e.g. monorepo dotnet
+   * projects under one root) and unmanaged processes running a DIFFERENT project's
+   * binary under the shared cwd (e.g. a sibling started by hand in a terminal).
+   */
+  private async killBinOrphans(
+    procCwd: string, key: string, managed: Map<number, string>, appDef: AppDef, procDef: ProcessDef
+  ): Promise<void> {
     try {
       const { stdout } = await execFileP('ps', ['-axo', 'pid=,pgid=,args=']);
+      const binRe = new RegExp(`${escapeRe(procCwd)}/(?:.+?/)?bin/(?:Debug|Release)/`);
       for (const line of stdout.split('\n')) {
         const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
         if (!m) continue;
-        const exe = m[3].split(' ')[0];
-        if (!exe.startsWith(`${procCwd}/`) || !/\/bin\/(Debug|Release)\//.test(exe)) continue;
+        const args = m[3];
+        const exe = args.split(' ')[0];
+        const isApphost = exe.startsWith(`${procCwd}/`) && binRe.test(exe);
+        const isDllHost = !isApphost && /(^|\/)(dotnet|mono)$/.test(exe) && binRe.test(args);
+        if (!isApphost && !isDllHost) continue;
         const pid = Number(m[1]);
         const pgid = Number(m[2]);
         if (pid === process.pid) continue;
@@ -167,7 +203,11 @@ export class ProcessManager {
           if (owner !== key) this.appendLog(key, `--- [controller] pid ${pid} belongs to managed sibling '${owner}' — leaving it alone`);
           continue;
         }
-        this.appendLog(key, `--- [controller] killing orphaned previous-generation process ${pid} (${exe.slice(0, 120)})`);
+        if (!this.ownsCommandPath(args, appDef, procDef, procCwd)) {
+          this.appendLog(key, `--- [controller] pid ${pid} runs another project's binary under the shared cwd (not '${key}') — leaving it alone`);
+          continue;
+        }
+        this.appendLog(key, `--- [controller] killing orphaned previous-generation process ${pid} (${args.slice(0, 120)})`);
         try { process.kill(-pgid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
       }
     } catch {
@@ -191,7 +231,7 @@ export class ProcessManager {
     const procCwd = procDef.cwd ? path.resolve(appDef.cwd, procDef.cwd) : appDef.cwd;
     const managed = this.managedGroups();
     // Sweep booting zombies of previous generations before the port checks.
-    await this.killBinOrphans(procCwd, key, managed);
+    await this.killBinOrphans(procCwd, key, managed, appDef, procDef);
     for (const port of declaredPorts(procDef)) {
       if (!(await isPortInUse(port))) continue;
       const holder = await portHolder(port);
@@ -206,8 +246,12 @@ export class ProcessManager {
       }
       const isRecordedOrphan = holder && recorded?.pid && (holder.pid === recorded.pid || holder.pgid === recorded.pid);
       // Unrecorded orphan: the holder's command runs a binary/script inside this
-      // process's own working directory — clearly a leftover of this process.
-      const isPathOrphan = holder && !isRecordedOrphan && holder.command.includes(`${procCwd}/`);
+      // process's own working directory — clearly a leftover of this process. A path
+      // under a shared cwd that belongs to a DIFFERENT project (sibling started by
+      // hand, vite server under <cwd>/app-vue, …) is NOT ours: fall through to the
+      // explicit foreign-holder error instead of silently killing it.
+      const isPathOrphan = holder && !isRecordedOrphan && holder.command.includes(`${procCwd}/`)
+        && this.ownsCommandPath(holder.command, appDef, procDef, procCwd);
       if (isRecordedOrphan || isPathOrphan) {
         this.appendLog(key, `--- [controller] port ${port} held by orphaned previous run (pid ${holder!.pid}${isPathOrphan ? ', matched by path' : ''}) — reclaiming`);
         if (await this.killPortHolder(holder!, port)) continue;
