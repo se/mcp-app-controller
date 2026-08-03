@@ -138,7 +138,7 @@ export class ProcessManager {
   private managedGroups(): Map<number, string> {
     const map = new Map<number, string>();
     for (const [key, entry] of this.runtime) {
-      if (entry.child.pid && !entry.exited) map.set(entry.child.pid, key);
+      if (entry.pid > 0 && !entry.exited) map.set(entry.pid, key);
     }
     return map;
   }
