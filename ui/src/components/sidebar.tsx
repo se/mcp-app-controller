@@ -1,7 +1,29 @@
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { profileAction, type AppInfo } from '@/lib/api'
+import { getVersion, profileAction, type AppInfo, type VersionInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { History, LayoutDashboard, Layers, Play, Plus, Settings, Square } from 'lucide-react'
+
+const fmtBuildDate = (ms: number) =>
+  new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+
+/** Version of the RUNNING daemon (commit + build date) — quiet line at the sidebar bottom. */
+function VersionFooter() {
+  const [v, setV] = useState<VersionInfo | null>(null)
+  useEffect(() => {
+    getVersion().then(setV).catch(() => setV(null)) // older daemons have no /version
+  }, [])
+  if (!v) return null
+  return (
+    <div
+      className="mt-2 truncate text-center font-mono text-[10px] text-muted-foreground/60"
+      title={`Running daemon\ncommit: ${v.commit}${v.builtAt ? `\nbuilt: ${new Date(v.builtAt).toLocaleString()}` : ''}\nstarted: ${new Date(v.startedAt).toLocaleString()}`}
+    >
+      {v.commit}
+      {v.builtAt ? ` · ${fmtBuildDate(v.builtAt)}` : ''}
+    </div>
+  )
+}
 
 export type View = 'overview' | 'activity' | 'settings' | `app:${string}`
 
@@ -136,6 +158,7 @@ export function Sidebar({
         <Button size="sm" className="w-full" onClick={onNewApp}>
           <Plus className="size-4" /> New App
         </Button>
+        <VersionFooter />
       </div>
     </aside>
   )

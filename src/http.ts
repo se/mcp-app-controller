@@ -85,6 +85,10 @@ export function createHttpServer(controller: Controller) {
     res.json(controller.fullState());
   });
 
+  api.get('/version', (_req, res) => {
+    res.json(controller.versionInfo ?? { commit: 'unknown', builtAt: null, startedAt: Date.now() });
+  });
+
   api.get('/audit', (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     res.json(controller.store.recentAudit(limit, (req.query.app as string) || undefined));
@@ -118,6 +122,16 @@ export function createHttpServer(controller: Controller) {
     const { process: proc, mode, reason = 'manual restart from UI', waitReady = false, takeover = false } = req.body ?? {};
     const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);
     res.json(r);
+  });
+
+  api.post('/apps/:app/clean', async (req, res) => {
+    const { reason = 'manual clean from UI' } = req.body ?? {};
+    try {
+      const msg = await controller.runClean(req.params.app, reason, UI_ACTOR);
+      res.json({ ok: true, message: msg });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   api.get('/settings', (_req, res) => {
@@ -358,7 +372,9 @@ export function createHttpServer(controller: Controller) {
   // ---------- App environment layers ----------
   api.put('/apps/:app/env', (req, res) => {
     try {
-      const appDef = controller.requireApp(req.params.app);
+      controller.requireApp(req.params.app);
+      // Copy-on-write: editing an include-provided app forks a personal copy into apps.yaml
+      const appDef = controller.config.materialize(req.params.app)!;
       const { env, environments, activeEnvironment, processEnv } = req.body ?? {};
       const rec = (v: unknown): Record<string, string> | null =>
         v && typeof v === 'object' && Object.values(v as object).every((x) => typeof x === 'string')
@@ -407,12 +423,21 @@ export function createHttpServer(controller: Controller) {
 
   api.post('/apps', (req, res) => {
     try {
-      const def = AppDefSchema.parse(req.body);
-      controller.config.upsertApp(def);
-      controller.store.audit({
-        session: 'ui', source: 'ui', action: 'define_app', app: def.name,
-        detail: `${def.processes.length} process(es)`, result: 'saved',
-      });
+      const { saveTo, ...body } = (req.body ?? {}) as Record<string, unknown>;
+      const def = AppDefSchema.parse(body);
+      if (saveTo === 'source') {
+        const file = controller.config.upsertAppInSource(def.name, def);
+        controller.store.audit({
+          session: 'ui', source: 'ui', action: 'define_app', app: def.name,
+          detail: `${def.processes.length} process(es) → shared config ${file}`, result: 'saved',
+        });
+      } else {
+        controller.config.upsertApp(def);
+        controller.store.audit({
+          session: 'ui', source: 'ui', action: 'define_app', app: def.name,
+          detail: `${def.processes.length} process(es)`, result: 'saved',
+        });
+      }
       res.json({ ok: true });
     } catch (err: any) {
       res.status(400).json({ error: err.message });

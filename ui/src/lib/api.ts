@@ -1,3 +1,5 @@
+import { toast } from 'sonner'
+
 export interface ProcMetrics {
   cpu: number
   memMb: number
@@ -43,6 +45,9 @@ export interface AppInfo {
   environments: Record<string, Record<string, string>>
   activeEnvironment: string | null
   prepare: string | null
+  clean: string | null
+  /** include file the definition comes from (shared repo config), or null if personal */
+  source: string | null
   staggerMs: number
   preparing: boolean
   /** Timing of the last whole-app start/restart (incl. prepare, until healthy) */
@@ -104,6 +109,7 @@ export interface AppDefInput {
   environments?: Record<string, Record<string, string>>
   activeEnvironment?: string
   prepare?: string
+  clean?: string
   staggerMs?: number
   processes: {
     name: string
@@ -120,16 +126,35 @@ export interface AppDefInput {
   }[]
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 export async function api<T = unknown>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch('/api' + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}) as { error?: string })
-    throw new Error((body as { error?: string }).error || res.statusText)
+  // Network-level failures ("Failed to fetch": connection refused/reset) happen
+  // transiently when the daemon restarts (deploy) or the machine is saturated right
+  // after a start-all spawns several heavy dev processes. GETs are idempotent —
+  // retry them with backoff instead of surfacing an error to the user.
+  const method = (opts?.method ?? 'GET').toUpperCase()
+  const maxAttempts = method === 'GET' ? 4 : 1
+  for (let attempt = 1; ; attempt++) {
+    let res: Response
+    try {
+      res = await fetch('/api' + path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts,
+      })
+    } catch (err) {
+      if (attempt < maxAttempts && err instanceof TypeError) {
+        await sleep(350 * attempt) // 350ms, 700ms, 1050ms
+        continue
+      }
+      throw err
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}) as { error?: string })
+      throw new Error((body as { error?: string }).error || res.statusText)
+    }
+    return res.json() as Promise<T>
   }
-  return res.json() as Promise<T>
 }
 
 export const getState = () => api<{ apps: AppInfo[]; profiles: Record<string, string[]> }>('/state')
@@ -216,11 +241,17 @@ export async function appActionWithTakeover(
     if (!ok) return
     const retry = await appAction(app, action, { ...body, takeover: true })
     const still = findErr(retry)
-    if (still?.error) alert(still.error)
+    if (still?.error) toast.error(still.error)
     return
   }
-  alert(err.error)
+  toast.error(err.error)
 }
+
+export const cleanApp = (app: string) =>
+  api<{ ok: true; message: string }>(`/apps/${encodeURIComponent(app)}/clean`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: 'manual clean from UI' }),
+  })
 
 export const releaseLease = (app: string) =>
   api(`/apps/${encodeURIComponent(app)}/release-lease`, { method: 'POST', body: '{}' })
@@ -233,7 +264,16 @@ export const getDaemonEnv = (reveal = false) =>
 export const recaptureDaemonEnv = () =>
   api<{ ok: boolean; count: number }>('/daemon/env/recapture', { method: 'POST', body: '{}' })
 
-export const saveApp = (def: AppDefInput) => api('/apps', { method: 'POST', body: JSON.stringify(def) })
+export interface VersionInfo {
+  commit: string
+  builtAt: number | null
+  startedAt: number
+}
+
+export const getVersion = () => api<VersionInfo>('/version')
+
+export const saveApp = (def: AppDefInput, saveTo?: 'source') =>
+  api('/apps', { method: 'POST', body: JSON.stringify(saveTo ? { ...def, saveTo } : def) })
 export const deleteApp = (app: string) => api(`/apps/${encodeURIComponent(app)}`, { method: 'DELETE' })
 
 // Small persisted UI preference lists (pinned apps, collapsed cards)

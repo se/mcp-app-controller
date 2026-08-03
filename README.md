@@ -158,6 +158,7 @@ Recommended addition to your global `~/.claude/CLAUDE.md` so sessions actually u
 | `wait_for_log` | Block until a log line matches a regex (readiness / next error), with timeout + lookback |
 | `claim_app` / `release_app` | Hold an app for a longer task so other sessions get warned |
 | `define_app` / `remove_app` | Manage app definitions |
+| `clear_build_cache` | Run the app's `clean` command (clear build outputs/package caches; next build restores fresh) |
 | `start_profile` / `stop_profile` | Start/stop a named group of apps (profiles in apps.yaml) |
 | `recent_activity` | Audit trail: who did what, when, why |
 
@@ -225,6 +226,36 @@ request"). Last request wins.
 - If another session holds an active lease, mutating calls return a **CONFLICT** message
   (who, why, how long ago) instead of executing. The session can retry with `force=true`.
 - The web UI (you) always overrides leases; UI actions are logged as `ui` in the audit trail.
+
+## Shared repo configs (`include:`)
+
+`apps.yaml` can pull app definitions from config files that live inside your repos and are
+shared with the whole team via git:
+
+```yaml
+include:
+  - ~/workspace/sources/monosign/core/fastBuild/app-controller.yaml
+```
+
+- **Opt-in, never invasive** — you only get the shared apps if you add the include line, and
+  an app you define in your own `apps.yaml` always wins over a same-named included app.
+  Editing an included app (define_app, env editor) forks a personal copy into `apps.yaml`.
+- **Per-developer overrides** — for each included `X.yaml`, a sibling `X.local.yaml`
+  (gitignored) is deep-merged on top: apps matched by name, processes by name, env maps
+  merged per key. Machine-specific bits (e.g. `fnm use 20 && yarn vue`) go there.
+- **Machine-independent paths** — a relative `cwd` in an included file resolves against
+  that file's directory, so committed configs work in any clone location.
+- **Hot-reload** — include files and their `.local.yaml` siblings are watched; saving any
+  of them reloads the config. Missing include files are skipped with a warning.
+- `list_apps` and the UI show where a shared definition comes from.
+
+### `clean` command (clear build cache)
+
+An app may define `clean:` (plus optional `cleanTimeoutMs`), a one-shot command run via the
+`clear_build_cache` MCP tool or the *clean* button on the app card — e.g. delete `obj/`+`bin/`
+and clear the package cache so the NEXT build restores fresh packages. It runs in the app
+cwd with the usual env layering, logs under `<app>/clean`, and invalidates the prepare reuse
+window. Running processes are not touched — restart afterwards to rebuild.
 
 ## Files
 

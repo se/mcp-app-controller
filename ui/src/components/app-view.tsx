@@ -228,9 +228,18 @@ export function AppView({
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5">
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => act('start')}>
-            <Play className="size-3.5" /> start all
-          </Button>
+          {running.length < app.processes.length && (
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => act('start')}>
+              <Play className="size-3.5" /> start all
+            </Button>
+          )}
+          {running.length > 0 && (
+            <Button variant="outline" size="sm" disabled={busy}
+              title={`Restart all running processes (${running.length})`}
+              onClick={() => act('restart')}>
+              <RotateCw className="size-3.5" /> restart all
+            </Button>
+          )}
           <Button variant="outline" size="sm" disabled={busy} onClick={() => act('stop')}>
             <Square className="size-3.5" /> stop all
           </Button>

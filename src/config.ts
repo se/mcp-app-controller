@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
@@ -42,6 +43,11 @@ export const AppDefSchema = z
     // `--no-build` launch commands safe (the build is always fresh at spawn time).
     prepare: z.string().optional(),
     prepareTimeoutMs: z.number().int().min(1000).default(600000),
+    // One-shot "clear build cache" command (run in the app cwd, same env layering).
+    // Invoked on demand via the clear_build_cache MCP tool / UI — e.g. delete obj/bin
+    // and clear the package manager's cache so the NEXT build restores fresh packages.
+    clean: z.string().optional(),
+    cleanTimeoutMs: z.number().int().min(1000).default(600000),
     // Optional pause between process starts in a multi-process operation (ms) —
     // spreads out CPU/RAM spikes of heavy dev servers (webpack etc.)
     staggerMs: z.number().int().min(0).default(0),
@@ -72,6 +78,16 @@ export type Trigger = z.infer<typeof TriggerSchema>;
 
 const ConfigFileSchema = z.object({
   apps: z.array(AppDefSchema).default([]),
+  // Additional config files to load (absolute, ~-prefixed, or relative to THIS file).
+  // Meant for configs that live INSIDE a repo and are shared by every developer via
+  // git (e.g. ~/workspace/sources/monosign/core/fastBuild/app-controller.yaml).
+  // For each included file X.yaml, a sibling X.local.yaml (gitignored, per-developer)
+  // is deep-merged on top: apps matched by name, processes by name, env maps merged.
+  // A relative app cwd inside an included file resolves against that file's directory,
+  // so committed files stay machine-independent. Opt-in and non-invasive: an app you
+  // define HERE (apps.yaml) always wins over a same-named included app, and editing an
+  // included app via define_app / the UI forks a personal copy into this file.
+  include: z.array(z.string()).default([]),
   // Shell whose LOGIN environment is captured at daemon startup and injected into
   // every managed process (e.g. /opt/homebrew/bin/fish). Decouples app env from the
   // user's registered default shell — works even if chsh was never run.
@@ -92,18 +108,82 @@ const ConfigFileSchema = z.object({
 export type ProcessDef = z.infer<typeof ProcessDefSchema>;
 export type AppDef = z.infer<typeof AppDefSchema>;
 
+function expandHome(p: string): string {
+  return p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+type Raw = Record<string, unknown>;
+
+function mergeEnv(base: unknown, over: unknown): Raw {
+  return { ...((base as Raw) ?? {}), ...((over as Raw) ?? {}) };
+}
+
+function mergeProcessRaw(base: Raw, over: Raw): Raw {
+  const out: Raw = { ...base, ...over };
+  if (base?.env || over?.env) out.env = mergeEnv(base?.env, over?.env);
+  return out;
+}
+
+/** Deep-merge a raw (pre-validation) app override onto a base app definition:
+ * scalars/arrays replace, env/environments merge per key, processes merge by name. */
+export function mergeAppRaw(base: Raw, over: Raw): Raw {
+  const out: Raw = { ...base, ...over };
+  if (base?.env || over?.env) out.env = mergeEnv(base?.env, over?.env);
+  if (base?.environments || over?.environments) {
+    const envs: Raw = { ...((base?.environments as Raw) ?? {}) };
+    for (const [k, v] of Object.entries((over?.environments as Raw) ?? {})) envs[k] = mergeEnv(envs[k], v);
+    out.environments = envs;
+  }
+  if (base?.processes || over?.processes) {
+    const procs: Raw[] = (((base?.processes as Raw[]) ?? [])).map((p) => ({ ...p }));
+    for (const op of ((over?.processes as Raw[]) ?? [])) {
+      const idx = procs.findIndex((p) => p?.name === op?.name);
+      if (idx >= 0) procs[idx] = mergeProcessRaw(procs[idx], op);
+      else procs.push(op);
+    }
+    out.processes = procs;
+  }
+  return out;
+}
+
+/** Derive the per-developer override path: foo.yaml -> foo.local.yaml */
+export function localOverridePath(file: string): string {
+  const ext = path.extname(file);
+  return ext ? file.slice(0, -ext.length) + '.local' + ext : file + '.local';
+}
+
 export class ConfigStore {
-  apps: AppDef[] = [];
+  /** Apps defined directly in the daemon's own apps.yaml (writable via define_app/UI). */
+  private mainApps: AppDef[] = [];
+  /** Apps contributed by `include:` files (read-only; edit the file to change them). */
+  private includedApps: AppDef[] = [];
+  /** app name -> include file it came from (with note when a .local.yaml was merged) */
+  private appOrigins = new Map<string, string>();
+  /** include entries exactly as written in apps.yaml (preserved on save) */
+  include: string[] = [];
+  private includeFiles: { file: string; localFile: string }[] = [];
+  private extraWatchers: fs.FSWatcher[] = [];
+
   envShell?: string;
   notify: { macos: boolean; slackWebhook?: string } = { macos: true };
   profiles: Record<string, string[]> = {};
   triggers: Trigger[] = [];
   onReload?: () => void;
   private saving = false;
+  private reloadTimer: NodeJS.Timeout | null = null;
+  private lastFingerprint = '';
 
   constructor(public readonly filePath: string) {
     this.load();
     this.watch();
+  }
+
+  /** Merged view. Your own apps.yaml definitions WIN over same-named included apps —
+   * shared repo configs never override a user's personal setup. */
+  get apps(): AppDef[] {
+    if (this.includedApps.length === 0) return this.mainApps;
+    const own = new Set(this.mainApps.map((a) => a.name));
+    return [...this.mainApps, ...this.includedApps.filter((a) => !own.has(a.name))];
   }
 
   load(): void {
@@ -112,44 +192,161 @@ export class ConfigStore {
     }
     const raw = fs.readFileSync(this.filePath, 'utf8');
     const parsed = ConfigFileSchema.parse(YAML.parse(raw) ?? {});
-    this.apps = parsed.apps;
+    this.mainApps = parsed.apps;
+    this.include = parsed.include;
     this.envShell = parsed.envShell;
     this.notify = parsed.notify;
     this.profiles = parsed.profiles;
     this.triggers = parsed.triggers;
+    this.loadIncludes();
+    this.watchIncludes();
+    this.lastFingerprint = this.fingerprint();
+  }
+
+  /** mtime+size of every config file involved — used to skip reloads triggered by
+   * unrelated filesystem events (fs.watch on directories can fire with null filename). */
+  private fingerprint(): string {
+    const files = [this.filePath, ...this.includeFiles.flatMap((f) => [f.file, f.localFile])];
+    return files
+      .map((f) => {
+        try {
+          const st = fs.statSync(f);
+          return `${f}:${st.mtimeMs}:${st.size}`;
+        } catch {
+          return `${f}:absent`;
+        }
+      })
+      .join('|');
+  }
+
+  private loadIncludes(): void {
+    this.includedApps = [];
+    this.appOrigins.clear();
+    this.includeFiles = [];
+    const baseDir = path.dirname(this.filePath);
+    for (const entry of this.include) {
+      const file = path.resolve(baseDir, expandHome(entry));
+      const localFile = localOverridePath(file);
+      this.includeFiles.push({ file, localFile });
+      if (!fs.existsSync(file)) {
+        console.warn(`[config] include not found (skipped): ${file}`);
+        continue;
+      }
+      let rawMain: Raw;
+      try {
+        rawMain = (YAML.parse(fs.readFileSync(file, 'utf8')) as Raw) ?? {};
+      } catch (err) {
+        console.error(`[config] include parse failed (skipped): ${file}:`, err);
+        continue;
+      }
+      let rawLocal: Raw | null = null;
+      if (fs.existsSync(localFile)) {
+        try {
+          rawLocal = (YAML.parse(fs.readFileSync(localFile, 'utf8')) as Raw) ?? {};
+        } catch (err) {
+          console.error(`[config] local override parse failed (ignored): ${localFile}:`, err);
+        }
+      }
+      const apps: Raw[] = (Array.isArray(rawMain.apps) ? (rawMain.apps as Raw[]) : []).map((a) => ({ ...a }));
+      const localApps: Raw[] = rawLocal && Array.isArray(rawLocal.apps) ? (rawLocal.apps as Raw[]) : [];
+      for (const oa of localApps) {
+        const idx = apps.findIndex((a) => a?.name === oa?.name);
+        if (idx >= 0) apps[idx] = mergeAppRaw(apps[idx], oa);
+        else apps.push(oa);
+      }
+      const dir = path.dirname(file);
+      for (const rawApp of apps) {
+        try {
+          // Committed repo configs must stay machine-independent: a relative cwd
+          // resolves against the include file's own directory.
+          if (rawApp && typeof rawApp.cwd === 'string' && !path.isAbsolute(rawApp.cwd)) {
+            rawApp.cwd = path.resolve(dir, rawApp.cwd);
+          }
+          const def = AppDefSchema.parse(rawApp);
+          if (this.appOrigins.has(def.name)) {
+            console.warn(`[config] app '${def.name}' already defined by ${this.appOrigins.get(def.name)} — duplicate in ${file} skipped`);
+            continue;
+          }
+          this.includedApps.push(def);
+          this.appOrigins.set(def.name, rawLocal ? `${file} (+ ${path.basename(localFile)})` : file);
+        } catch (err) {
+          console.error(`[config] invalid app definition in ${file} (skipped):`, err);
+        }
+      }
+      if (apps.length > 0) console.log(`[config] include loaded: ${file} (${apps.length} app(s)${rawLocal ? ', local override merged' : ''})`);
+    }
+    for (const a of this.mainApps) {
+      if (this.appOrigins.has(a.name)) {
+        console.log(`[config] app '${a.name}': using your ${path.basename(this.filePath)} definition (personal copy overrides include ${this.appOrigins.get(a.name)})`);
+      }
+    }
+  }
+
+  private scheduleReload(): void {
+    if (this.saving) return;
+    if (this.reloadTimer) clearTimeout(this.reloadTimer);
+    this.reloadTimer = setTimeout(() => {
+      try {
+        if (this.fingerprint() === this.lastFingerprint) return; // spurious event — nothing changed
+        this.load();
+        bus.emit('state');
+        console.log('[config] configuration reloaded');
+        this.onReload?.();
+      } catch (err) {
+        console.error('[config] reload failed, keeping previous config:', err);
+      }
+    }, 500);
   }
 
   private watch(): void {
-    let timer: NodeJS.Timeout | null = null;
     try {
-      fs.watch(this.filePath, () => {
-        if (this.saving) return;
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          try {
-            this.load();
-            bus.emit('state');
-            console.log('[config] apps.yaml reloaded');
-            this.onReload?.();
-          } catch (err) {
-            console.error('[config] apps.yaml reload failed, keeping previous config:', err);
-          }
-        }, 500);
-      });
+      fs.watch(this.filePath, () => this.scheduleReload());
     } catch {
       // watching is best-effort
+    }
+  }
+
+  /** Watch include files AND their (possibly not-yet-existing) .local.yaml siblings
+   * by watching their parent directories — re-armed on every reload. */
+  private watchIncludes(): void {
+    for (const w of this.extraWatchers) {
+      try { w.close(); } catch { /* already closed */ }
+    }
+    this.extraWatchers = [];
+    const byDir = new Map<string, Set<string>>();
+    for (const f of this.includeFiles) {
+      for (const p of [f.file, f.localFile]) {
+        const dir = path.dirname(p);
+        if (!byDir.has(dir)) byDir.set(dir, new Set());
+        byDir.get(dir)!.add(path.basename(p));
+      }
+    }
+    for (const [dir, names] of byDir) {
+      if (!fs.existsSync(dir)) continue;
+      try {
+        const w = fs.watch(dir, (_event, filename) => {
+          if (filename && !names.has(filename.toString())) return;
+          this.scheduleReload();
+        });
+        this.extraWatchers.push(w);
+      } catch {
+        // watching is best-effort
+      }
     }
   }
 
   save(): void {
     this.saving = true;
     try {
-      const doc: Record<string, unknown> = { apps: this.apps };
+      // Only daemon-owned apps are persisted — included apps live in their own files.
+      const doc: Record<string, unknown> = { apps: this.mainApps };
+      if (this.include.length > 0) doc.include = this.include;
       if (this.envShell) doc.envShell = this.envShell;
       if (Object.keys(this.profiles).length > 0) doc.profiles = this.profiles;
       if (this.triggers.length > 0) doc.triggers = this.triggers;
       if (!this.notify.macos || this.notify.slackWebhook) doc.notify = this.notify;
       fs.writeFileSync(this.filePath, YAML.stringify(doc));
+      this.lastFingerprint = this.fingerprint();
     } finally {
       setTimeout(() => (this.saving = false), 1000);
     }
@@ -160,18 +357,113 @@ export class ConfigStore {
     return this.apps.find((a) => a.name === name);
   }
 
+  /** Include file the ACTIVE definition of an app comes from, or undefined when the
+   * app is defined in apps.yaml itself (a personal definition always wins). */
+  sourceOf(name: string): string | undefined {
+    if (this.mainApps.some((a) => a.name === name)) return undefined;
+    return this.appOrigins.get(name);
+  }
+
+  /** Copy-on-write: return the writable (apps.yaml-owned) definition of an app.
+   * When the active definition comes from an include, fork a personal copy into
+   * apps.yaml first — shared repo configs are never modified by the daemon. */
+  materialize(name: string): AppDef | undefined {
+    const own = this.mainApps.find((a) => a.name === name);
+    if (own) return own;
+    const inc = this.includedApps.find((a) => a.name === name);
+    if (!inc) return undefined;
+    const copy: AppDef = structuredClone(inc);
+    this.mainApps.push(copy);
+    console.log(`[config] app '${name}' forked from ${this.appOrigins.get(name)} into ${path.basename(this.filePath)} (personal copy)`);
+    return copy;
+  }
+
   upsertApp(def: AppDef): void {
-    // Resolve relative cwd against the home of the config file's parent git dir
-    const idx = this.apps.findIndex((a) => a.name === def.name);
-    if (idx >= 0) this.apps[idx] = def;
-    else this.apps.push(def);
+    // Always writes to apps.yaml. If the name matches an included app this creates
+    // (or updates) a personal copy that overrides the shared definition.
+    const idx = this.mainApps.findIndex((a) => a.name === def.name);
+    if (idx >= 0) this.mainApps[idx] = def;
+    else this.mainApps.push(def);
     this.save();
   }
 
+  /** Origin include file of an app (plain path, without the local-override note). */
+  sourceFileOf(name: string): string | undefined {
+    const origin = this.appOrigins.get(name);
+    return origin ? origin.split(' (+')[0] : undefined;
+  }
+
+  /** Drop schema-default values so committed shared configs stay minimal and
+   * git diffs only show what actually changed. */
+  private pruneDefaults(def: AppDef): Raw {
+    const out: Raw = { name: def.name, cwd: def.cwd };
+    if (def.description) out.description = def.description;
+    if (Object.keys(def.env).length > 0) out.env = def.env;
+    if (Object.keys(def.environments).length > 0) out.environments = def.environments;
+    if (def.activeEnvironment) out.activeEnvironment = def.activeEnvironment;
+    if (def.prepare) out.prepare = def.prepare;
+    if (def.prepareTimeoutMs !== 600000) out.prepareTimeoutMs = def.prepareTimeoutMs;
+    if (def.clean) out.clean = def.clean;
+    if (def.cleanTimeoutMs !== 600000) out.cleanTimeoutMs = def.cleanTimeoutMs;
+    if (def.staggerMs > 0) out.staggerMs = def.staggerMs;
+    out.processes = def.processes.map((p) => {
+      const o: Raw = { name: p.name, command: p.command };
+      if (p.devCommand) o.devCommand = p.devCommand;
+      if (p.cwd) o.cwd = p.cwd;
+      if (Object.keys(p.env).length > 0) o.env = p.env;
+      if (p.autoRestart) o.autoRestart = true;
+      if (p.healthUrl) o.healthUrl = p.healthUrl;
+      if (p.healthPort != null) o.healthPort = p.healthPort;
+      if (p.ownLogTimestamps) o.ownLogTimestamps = true;
+      if (p.ports.length > 0) o.ports = p.ports;
+      if (p.dependsOn.length > 0) o.dependsOn = p.dependsOn;
+      return o;
+    });
+    return out;
+  }
+
+  /** Write an app definition into the shared include file it originates from.
+   * The rest of the file (other apps, comments, key order) is preserved via the
+   * YAML document API. Any personal fork in apps.yaml is removed afterwards so
+   * the shared definition becomes the active one again. Returns the file path.
+   * Note: an existing X.local.yaml override still merges on top after reload. */
+  upsertAppInSource(name: string, def: AppDef): string {
+    const file = this.sourceFileOf(name);
+    if (!file) throw new Error(`App '${name}' does not come from a shared config file`);
+    const doc = YAML.parseDocument(fs.readFileSync(file, 'utf8'));
+    const apps = doc.get('apps');
+    if (!YAML.isSeq(apps)) throw new Error(`No 'apps' list found in ${file}`);
+    const out = this.pruneDefaults(def);
+    // Committed configs must stay machine-independent: relativize cwd when possible
+    const dir = path.dirname(file);
+    if (typeof out.cwd === 'string' && path.isAbsolute(out.cwd)) {
+      const rel = path.relative(dir, out.cwd);
+      if (rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)) out.cwd = rel;
+      else if (rel === '') out.cwd = '.';
+    }
+    const idx = apps.items.findIndex((it) => YAML.isMap(it) && it.get('name') === def.name);
+    const node = doc.createNode(out);
+    if (idx >= 0) apps.items[idx] = node;
+    else apps.items.push(node);
+    this.saving = true;
+    try {
+      fs.writeFileSync(file, doc.toString());
+      const hadFork = this.mainApps.some((a) => a.name === def.name);
+      this.mainApps = this.mainApps.filter((a) => a.name !== def.name);
+      if (hadFork) this.save();
+      this.load();
+      this.lastFingerprint = this.fingerprint();
+    } finally {
+      setTimeout(() => (this.saving = false), 1000);
+    }
+    bus.emit('state');
+    return file;
+  }
+
   removeApp(name: string): boolean {
-    const before = this.apps.length;
-    this.apps = this.apps.filter((a) => a.name !== name);
-    if (this.apps.length !== before) {
+    const before = this.mainApps.length;
+    this.mainApps = this.mainApps.filter((a) => a.name !== name);
+    if (this.mainApps.length !== before) {
       this.save();
       return true;
     }

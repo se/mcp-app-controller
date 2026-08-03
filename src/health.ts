@@ -28,6 +28,14 @@ export class HealthMonitor {
     if (!cur || cur.since !== st.startedAt) this.readyAt.set(key, { since: st.startedAt, at: Date.now() });
   }
 
+  /** Adopted processes were already up before this daemon started — mark them ready
+   * immediately so the UI doesn't show a "starting…" pulse or a bogus ready time. */
+  assumeReady(app: string, proc: string): void {
+    const st = this.pm.getState(app, proc);
+    if (st.status !== 'running' || !st.startedAt) return;
+    this.readyAt.set(`${app}/${proc}`, { since: st.startedAt, at: st.startedAt });
+  }
+
   /** How long the current run took to become healthy (ms), or null if unknown/not applicable. */
   getReadyMs(app: string, proc: string): number | null {
     const st = this.pm.getState(app, proc);

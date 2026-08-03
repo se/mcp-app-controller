@@ -12,13 +12,21 @@ export type Mode = 'start' | 'dev';
 export type ProcStatus = 'running' | 'stopped' | 'crashed';
 
 interface RuntimeEntry {
-  child: ChildProcess;
+  /** Present for processes spawned by THIS daemon; absent for adopted ones. */
+  child?: ChildProcess;
+  pid: number;
   mode: Mode;
   startedAt: number;
   stopRequested: boolean;
   restartCount: number;
   exited: boolean;
   exitPromise: Promise<void>;
+  resolveExit: () => void;
+  /** Process survived a daemon restart and was re-attached (no child handle —
+   * exit is detected by the pid watchdog, exit codes are unknown). */
+  adopted?: boolean;
+  appDef: AppDef;
+  procDef: ProcessDef;
 }
 
 export interface ProcState {
@@ -37,6 +45,17 @@ export const stripAnsiCodes = (s: string) => s.replace(ANSI_RE, '');
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const STAMPED_RE = /^\[\d{4}-\d{2}-\d{2}T/;
 
 const ERROR_LINE_RE = /error|exception|fatal|panic|unhandled|EADDRINUSE|address already in use|failed/i;
 
@@ -220,8 +239,8 @@ export class ProcessManager {
   getState(app: string, proc: string): ProcState {
     const key = procKey(app, proc);
     const rt = this.runtime.get(key);
-    if (rt && rt.child.pid && !rt.exited) {
-      return { status: 'running', pid: rt.child.pid, mode: rt.mode, startedAt: rt.startedAt };
+    if (rt && rt.pid > 0 && !rt.exited) {
+      return { status: 'running', pid: rt.pid, mode: rt.mode, startedAt: rt.startedAt };
     }
     const exit = this.lastExit.get(key);
     if (exit && !this.stopped.has(key)) {
@@ -253,90 +272,60 @@ export class ProcessManager {
 
     await this.ensurePortsFree(appDef, procDef, key, takeover, session, source);
 
+    // Children write their output STRAIGHT to the log file (own fd, O_APPEND) instead
+    // of a pipe into the daemon. This is what lets them survive a daemon restart: a
+    // pipe's read end dies with the daemon (SIGPIPE / blocked writes), a file doesn't.
+    // The daemon tails the file to feed the live UI, triggers, and wait_for_log.
+    // Attach the tail BEFORE the first marker line so it becomes the single emitter.
+    this.attachTail(key);
     this.appendLog(key, `--- [controller] starting (mode=${mode}, by=${session}): ${command}`);
-    const child = spawn(command, {
-      shell: true,
-      cwd,
-      // Layering: daemon env < captured shell env < app-wide env < active environment < process env
-      env: {
-        ...process.env,
-        ...this.baseEnv,
-        ...appDef.env,
-        ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
-        ...procDef.env,
-        FORCE_COLOR: '1',
-        CLICOLOR_FORCE: '1',
-      },
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const logFd = fs.openSync(this.logFile(appDef.name, procDef.name), 'a');
+    let child: ChildProcess;
+    try {
+      child = spawn(command, {
+        shell: true,
+        cwd,
+        // Layering: daemon env < captured shell env < app-wide env < active environment < process env
+        env: {
+          ...process.env,
+          ...this.baseEnv,
+          ...appDef.env,
+          ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
+          ...procDef.env,
+          FORCE_COLOR: '1',
+          CLICOLOR_FORCE: '1',
+        },
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+      });
+    } finally {
+      fs.closeSync(logFd); // the child holds its own duplicate
+    }
 
     let resolveExit!: () => void;
     const exitPromise = new Promise<void>((r) => (resolveExit = r));
     const entry: RuntimeEntry = {
       child,
+      pid: child.pid ?? -1,
       mode,
       startedAt: Date.now(),
       stopRequested: false,
       restartCount: this.runtime.get(key)?.restartCount ?? 0,
       exited: false,
       exitPromise,
+      resolveExit,
+      appDef,
+      procDef,
     };
     this.runtime.set(key, entry);
     this.stopped.delete(key);
     this.store.setRunning(appDef.name, procDef.name, mode, child.pid);
 
-    for (const stream of [child.stdout, child.stderr]) {
-      if (!stream) continue;
-      const rl = readline.createInterface({ input: stream });
-      rl.on('line', (line) => this.appendLog(key, line));
-    }
-
     child.on('error', (err) => {
       this.appendLog(key, `--- [controller] spawn error: ${err.message}`);
     });
 
-    child.on('exit', (code, signal) => {
-      entry.exited = true;
-      const exit: { code: number | null; signal: string | null; at: number; summary?: string } = {
-        code, signal: signal ?? null, at: Date.now(),
-      };
-      if (!entry.stopRequested) {
-        exit.summary = this.extractErrorSummary(appDef.name, procDef.name);
-      }
-      this.lastExit.set(key, exit);
-      this.appendLog(key, `--- [controller] exited (code=${code}, signal=${signal ?? 'none'})`);
-      const wasRequested = entry.stopRequested;
-      if (wasRequested) this.stopped.add(key);
-      resolveExit();
-      bus.emit('state');
-
-      if (!wasRequested) {
-        this.store.audit({
-          session: 'system',
-          source: 'system',
-          action: 'crash-detected',
-          app: appDef.name,
-          proc: procDef.name,
-          detail: `exit code=${code} signal=${signal ?? 'none'}`,
-          result: 'crashed',
-        });
-        bus.emit('crash', { app: appDef.name, proc: procDef.name, code, summary: exit.summary });
-        if (procDef.autoRestart && entry.restartCount < 3) {
-          const delay = 2000 * (entry.restartCount + 1);
-          this.appendLog(key, `--- [controller] auto-restarting in ${delay}ms (attempt ${entry.restartCount + 1}/3)`);
-          setTimeout(() => {
-            if (this.isRunning(appDef.name, procDef.name)) return;
-            this.start(appDef, procDef, mode, 'system', 'system')
-              .then(() => {
-                const rt = this.runtime.get(key);
-                if (rt) rt.restartCount = entry.restartCount + 1;
-              })
-              .catch((err) => this.appendLog(key, `--- [controller] auto-restart failed: ${err.message}`));
-          }, delay);
-        }
-      }
-    });
+    child.on('exit', (code, signal) => this.handleExit(key, entry, code, signal ?? null));
 
     // Fail-fast window: give the process up to 400ms to die instantly (bad command,
     // missing dir, port bind crash) so the caller sees 'crashed' instead of a false
@@ -344,6 +333,109 @@ export class ProcessManager {
     await Promise.race([exitPromise, sleep(400)]);
     bus.emit('state');
     return this.getState(appDef.name, procDef.name);
+  }
+
+  /**
+   * Re-attach a process that survived a daemon restart. No child handle exists, so
+   * exit codes are unknowable — the pid watchdog detects death (≤1s) and drives the
+   * same crash pipeline (audit, notification, auto-restart) as a normal exit.
+   */
+  adopt(appDef: AppDef, procDef: ProcessDef, mode: Mode, pid: number, startedAt: number): ProcState {
+    const key = procKey(appDef.name, procDef.name);
+    let resolveExit!: () => void;
+    const exitPromise = new Promise<void>((r) => (resolveExit = r));
+    const entry: RuntimeEntry = {
+      pid,
+      mode,
+      startedAt,
+      stopRequested: false,
+      restartCount: 0,
+      exited: false,
+      exitPromise,
+      resolveExit,
+      adopted: true,
+      appDef,
+      procDef,
+    };
+    this.runtime.set(key, entry);
+    this.stopped.delete(key);
+    this.store.setRunning(appDef.name, procDef.name, mode, pid);
+    this.attachTail(key);
+    this.appendLog(key, `--- [controller] adopted running process (pid ${pid}) after daemon restart`);
+    this.ensureWatchdog();
+    bus.emit('state');
+    return this.getState(appDef.name, procDef.name);
+  }
+
+  /** Detects death of adopted processes (no child handle → no 'exit' event). */
+  private watchdog?: NodeJS.Timeout;
+
+  private ensureWatchdog(): void {
+    if (this.watchdog) return;
+    this.watchdog = setInterval(() => {
+      for (const [key, e] of this.runtime) {
+        if (!e.adopted || e.exited) continue;
+        if (!isPidAlive(e.pid)) this.handleExit(key, e, null, null, true);
+      }
+    }, 1000);
+  }
+
+  /** Common exit pipeline for spawned ('exit' event) and adopted (watchdog) processes. */
+  private handleExit(
+    key: string, entry: RuntimeEntry, code: number | null, signal: string | null, adopted = false
+  ): void {
+    if (entry.exited) return;
+    entry.exited = true;
+    const { appDef, procDef, mode } = entry;
+    const exit: { code: number | null; signal: string | null; at: number; summary?: string } = {
+      code, signal, at: Date.now(),
+    };
+    if (!entry.stopRequested) {
+      exit.summary = this.extractErrorSummary(appDef.name, procDef.name);
+    }
+    this.lastExit.set(key, exit);
+    this.appendLog(
+      key,
+      adopted
+        ? `--- [controller] exited (adopted process — exit code unknown)`
+        : `--- [controller] exited (code=${code}, signal=${signal ?? 'none'})`
+    );
+    const wasRequested = entry.stopRequested;
+    if (wasRequested) this.stopped.add(key);
+    entry.resolveExit();
+    bus.emit('state');
+    // Keep tailing briefly to flush the process's final log lines, then detach —
+    // unless an auto-restart already brought it back.
+    setTimeout(() => {
+      const cur = this.runtime.get(key);
+      if (!cur || cur.exited) this.detachTail(key);
+    }, 1500);
+
+    if (!wasRequested) {
+      this.store.audit({
+        session: 'system',
+        source: 'system',
+        action: 'crash-detected',
+        app: appDef.name,
+        proc: procDef.name,
+        detail: adopted ? 'process died (adopted — exit code unknown)' : `exit code=${code} signal=${signal ?? 'none'}`,
+        result: 'crashed',
+      });
+      bus.emit('crash', { app: appDef.name, proc: procDef.name, code, summary: exit.summary });
+      if (procDef.autoRestart && entry.restartCount < 3) {
+        const delay = 2000 * (entry.restartCount + 1);
+        this.appendLog(key, `--- [controller] auto-restarting in ${delay}ms (attempt ${entry.restartCount + 1}/3)`);
+        setTimeout(() => {
+          if (this.isRunning(appDef.name, procDef.name)) return;
+          this.start(appDef, procDef, mode, 'system', 'system')
+            .then(() => {
+              const rt = this.runtime.get(key);
+              if (rt) rt.restartCount = entry.restartCount + 1;
+            })
+            .catch((err) => this.appendLog(key, `--- [controller] auto-restart failed: ${err.message}`));
+        }, delay);
+      }
+    }
   }
 
   /**
@@ -407,20 +499,21 @@ export class ProcessManager {
       return this.getState(app, proc);
     }
     entry.stopRequested = true;
-    const pid = entry.child.pid!;
+    const pid = entry.pid;
     this.appendLog(key, `--- [controller] stopping (SIGTERM to process group ${pid})`);
     try {
       process.kill(-pid, 'SIGTERM');
     } catch {
-      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
     }
+    // Adopted processes have no 'exit' event — the watchdog resolves exitPromise (≤1s lag).
     const killed = await Promise.race([
       entry.exitPromise.then(() => true),
       new Promise<boolean>((r) => setTimeout(() => r(false), gracefulMs)),
     ]);
     if (!killed) {
       this.appendLog(key, `--- [controller] escalating to SIGKILL`);
-      try { process.kill(-pid, 'SIGKILL'); } catch { try { entry.child.kill('SIGKILL'); } catch { /* gone */ } }
+      try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
       await Promise.race([entry.exitPromise, new Promise((r) => setTimeout(r, 3000))]);
     }
     bus.emit('state');
@@ -435,37 +528,145 @@ export class ProcessManager {
         return this.stop(app, proc, 6000, false);
       })
     );
+    this.detachAll();
+  }
+
+  /**
+   * Daemon shutdown WITHOUT stopping children (the default): flush our side of the
+   * logs and stop timers. Children write to their own log fds, so they keep running
+   * unaffected and are adopted by the next daemon via the persisted restore state.
+   * Returns how many processes were left running.
+   */
+  detachAll(): number {
+    let left = 0;
+    for (const [key, e] of this.runtime) {
+      if (e.exited) continue;
+      left++;
+      this.appendLog(key, `--- [controller] daemon stopping — leaving process running (pid ${e.pid}); it will be adopted on the next daemon start`);
+    }
+    for (const t of this.tailers.values()) clearInterval(t.timer);
+    this.tailers.clear();
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = undefined;
+    for (const ws of this.logStreams.values()) {
+      try { ws.end(); } catch { /* already closed */ }
+    }
+    this.logStreams.clear();
+    return left;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Log tailing: children write raw lines to the log file themselves; the daemon
+  // tails each running process's file to feed SSE, triggers, and wait_for_log.
+  // ---------------------------------------------------------------------------
+
+  private tailers = new Map<string, { file: string; offset: number; buf: string; timer: NodeJS.Timeout }>();
+
+  private attachTail(key: string): void {
+    if (this.tailers.has(key)) return;
+    const [app, proc] = key.split('/');
+    const file = this.logFile(app, proc);
+    let offset = 0;
+    try { offset = fs.statSync(file).size; } catch { /* not created yet */ }
+    const t = { file, offset, buf: '', timer: setInterval(() => this.pollTail(key), 250) };
+    this.tailers.set(key, t);
+  }
+
+  private detachTail(key: string): void {
+    const t = this.tailers.get(key);
+    if (!t) return;
+    this.pollTail(key); // final flush
+    clearInterval(t.timer);
+    this.tailers.delete(key);
+  }
+
+  private pollTail(key: string): void {
+    const t = this.tailers.get(key);
+    if (!t) return;
+    const [app, proc] = key.split('/');
+    let size = 0;
+    try { size = fs.statSync(t.file).size; } catch { return; }
+    if (size < t.offset) { t.offset = 0; t.buf = ''; } // file truncated (rotation)
+    if (size > t.offset) {
+      try {
+        const fd = fs.openSync(t.file, 'r');
+        try {
+          const toRead = Math.min(size - t.offset, 256 * 1024);
+          const buf = Buffer.alloc(toRead);
+          const n = fs.readSync(fd, buf, 0, toRead, t.offset);
+          t.offset += n;
+          t.buf += buf.toString('utf8', 0, n);
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch { return; }
+      const parts = t.buf.split('\n');
+      t.buf = parts.pop() ?? '';
+      const stamp = `[${new Date().toISOString()}]`;
+      for (const line of parts) {
+        if (!line.trim()) continue;
+        // Controller marker lines are stamped at write time; raw child lines get a
+        // read-time stamp for the live views (the file itself keeps them raw).
+        bus.emit('log', { app, proc, line: STAMPED_RE.test(line) ? line : `${stamp} ${line}` });
+      }
+    }
+    this.maybeRotate(key, t.file);
+  }
+
+  private lastRotateCheck = new Map<string, number>();
+
+  /** Copy+truncate rotation (checked every 10s per process): children hold O_APPEND
+   * fds to this exact file, so the classic rename would leave them writing into the
+   * rotated file forever. Truncating in place keeps every open fd valid. */
+  private maybeRotate(key: string, file: string): void {
+    const now = Date.now();
+    if ((this.lastRotateCheck.get(key) ?? 0) > now - 10_000) return;
+    this.lastRotateCheck.set(key, now);
+    const maxBytes = (Number(process.env.APPCTRL_LOG_MAX_MB) || 20) * 1024 * 1024;
+    try {
+      if (fs.statSync(file).size < maxBytes) return;
+      if (fs.existsSync(`${file}.2`)) fs.unlinkSync(`${file}.2`);
+      if (fs.existsSync(`${file}.1`)) fs.renameSync(`${file}.1`, `${file}.2`);
+      fs.copyFileSync(file, `${file}.1`);
+      fs.truncateSync(file, 0);
+      const t = this.tailers.get(key);
+      if (t) { t.offset = 0; t.buf = ''; }
+    } catch {
+      // best effort
+    }
   }
 
   private appendCounts = new Map<string, number>();
+
+  /** Open append streams per process — async buffered writes instead of a sync
+   * open/write/close per line (build bursts of 10k+ lines used to stall the event
+   * loop and made the HTTP server unresponsive). */
+  private logStreams = new Map<string, fs.WriteStream>();
 
   private appendLog(key: string, line: string): void {
     const [app, proc] = key.split('/');
     const stamped = `[${new Date().toISOString()}] ${line}\n`;
     try {
       const file = this.logFile(app, proc);
-      fs.appendFileSync(file, stamped);
-      // Rotation: check size every 500 appends per process
+      let ws = this.logStreams.get(key);
+      if (!ws) {
+        // flags 'a' → O_APPEND: stays valid across copy+truncate rotation.
+        ws = fs.createWriteStream(file, { flags: 'a' });
+        ws.on('error', () => this.logStreams.delete(key));
+        this.logStreams.set(key, ws);
+      }
+      ws.write(stamped);
+      // Rotation for keys WITHOUT a tailer (one-shot prepare/clean logs) — tailed
+      // files are rotated by the tailer itself. Checked every 500 appends.
       const n = (this.appendCounts.get(key) ?? 0) + 1;
       this.appendCounts.set(key, n);
-      if (n % 500 === 0) this.rotateIfNeeded(file);
+      if (n % 500 === 0 && !this.tailers.has(key)) this.maybeRotate(key, file);
     } catch {
       // best effort
     }
-    bus.emit('log', { app, proc, line: stamped.trimEnd() });
-  }
-
-  /** Rotate <file> → <file>.1 → <file>.2 when it exceeds APPCTRL_LOG_MAX_MB (default 20). */
-  private rotateIfNeeded(file: string): void {
-    const maxBytes = (Number(process.env.APPCTRL_LOG_MAX_MB) || 20) * 1024 * 1024;
-    try {
-      if (fs.statSync(file).size < maxBytes) return;
-      if (fs.existsSync(`${file}.2`)) fs.unlinkSync(`${file}.2`);
-      if (fs.existsSync(`${file}.1`)) fs.renameSync(`${file}.1`, `${file}.2`);
-      fs.renameSync(file, `${file}.1`);
-    } catch {
-      // best effort
-    }
+    // Tailed keys: the tailer is the single SSE source (it reads this line from the
+    // file), so don't emit here — that would duplicate every controller marker line.
+    if (!this.tailers.has(key)) bus.emit('log', { app, proc, line: stamped.trimEnd() });
   }
 
   /**

@@ -37,7 +37,7 @@ const cleanLogLine = (raw: string) =>
   raw
     .replace(/^\[[^\]]*\]\s*/, '')
     // eslint-disable-next-line no-control-regex
-    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/\[[0-9;]*[A-Za-z]/g, '')
     .trim()
 
 /**
@@ -424,42 +424,28 @@ export function AppCard({
       )}
 
       {(app.preparing || app.processes.some(isStarting) || app.lastStart || runningCount > 0) && (
-        <div
-          className={cn(
-            'flex items-center gap-2 border-t px-5 text-[11px]',
-            inFlight
-              ? 'border-sky-500/10 bg-sky-500/5 py-2 text-xs text-sky-700 dark:bg-sky-500/[0.08] dark:text-sky-400'
-              : 'bg-muted/40 py-1.5 text-muted-foreground'
-          )}
-        >
+        <div className="flex items-center gap-2 border-t px-5 py-1.5 text-[11px] text-muted-foreground">
           {app.preparing ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="size-2 shrink-0 animate-pulse rounded-full bg-sky-500 shadow-[0_0_6px_theme(colors.sky.500)]" />
-              <span className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-                preparing
-              </span>
+            <span className="flex min-w-0 items-center gap-1.5 text-sky-600 dark:text-sky-400">
+              <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" />
+              <span className="shrink-0 font-medium">preparing</span>
               <PrepareTail app={app.name} fallback={app.prepare} />
             </span>
           ) : app.processes.some(isStarting) ? (
-            <span className="flex items-center gap-2">
-              <span className="size-2 shrink-0 animate-pulse rounded-full bg-sky-500 shadow-[0_0_6px_theme(colors.sky.500)]" />
-              <span className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-                starting
-              </span>
+            <span className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
+              <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" />
+              <span className="font-medium">starting</span>
               <span className="opacity-70">waiting for first healthy check</span>
             </span>
-          ) : app.lastStart ? (
+          ) : (
             <span
               className="flex items-center gap-1.5 tabular-nums"
-              title={`last full start: ${fmtElapsed(app.lastStart.totalMs)} total (prepare ${fmtElapsed(app.lastStart.prepareMs)}), ${app.lastStart.procs} processes`}
+              title={`last full start: ${fmtElapsed(app.lastStart!.totalMs)} total (prepare ${fmtElapsed(app.lastStart!.prepareMs)}), ${app.lastStart!.procs} processes`}
             >
               <Timer className="size-3" />
-              last start {fmtElapsed(app.lastStart.totalMs)}
-              {app.lastStart.prepareMs > 0 && <span className="opacity-70">(prepare {fmtElapsed(app.lastStart.prepareMs)})</span>}
+              last start {fmtElapsed(app.lastStart!.totalMs)}
+              {app.lastStart!.prepareMs > 0 && <span className="opacity-70">(prepare {fmtElapsed(app.lastStart!.prepareMs)})</span>}
             </span>
-          ) : (
-            // Running but no timing recorded (e.g. processes adopted after a daemon restart)
-            <span className="flex items-center gap-1.5"><Timer className="size-3" /> running</span>
           )}
           {runningCount > 0 && (totals.cpu > 0 || totals.memMb > 0) && (
             <span className="ml-auto shrink-0 tabular-nums opacity-80" title="total of all running processes">

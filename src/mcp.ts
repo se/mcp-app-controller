@@ -72,7 +72,8 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       }
       for (const app of state.apps) {
         const envTag = app.activeEnvironment ? ` [env: ${app.activeEnvironment}]` : '';
-        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''}${envTag} (cwd: ${app.cwd})`);
+        const srcTag = app.source ? ` [shared config: ${app.source}]` : '';
+        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''}${envTag} (cwd: ${app.cwd})${srcTag}`);
         if (app.lease) {
           const left = Math.round((app.lease.expires_at - Date.now()) / 1000);
           lines.push(`  LEASE: held by session '${app.lease.session}' for "${app.lease.reason}" (expires in ${left}s)`);
@@ -392,7 +393,10 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       },
     },
     async ({ app, environment }) => {
-      const appDef = controller.requireApp(app);
+      controller.requireApp(app);
+      // Copy-on-write: if the app comes from a shared include file, fork a personal
+      // copy into apps.yaml — the shared file is never modified by the daemon.
+      const appDef = controller.config.materialize(app)!;
       const env = environment?.trim() || undefined;
       if (env && !(env in appDef.environments)) {
         return text(`App '${app}' has no environment '${env}'. Defined: ${Object.keys(appDef.environments).join(', ') || '(none)'}`);
@@ -504,6 +508,8 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         cwd: z.string().describe('Absolute path to the app root directory'),
         prepare: z.string().optional().describe('Optional build-once command run to completion before every start/restart of this app (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
         prepareTimeoutMs: z.number().int().optional().describe('Timeout for the prepare command in ms (default 600000)'),
+        clean: z.string().optional().describe('Optional one-shot "clear build cache" command run on demand via clear_build_cache — e.g. delete build outputs and clear the package cache so the next build restores fresh packages'),
+        cleanTimeoutMs: z.number().int().optional().describe('Timeout for the clean command in ms (default 600000)'),
         staggerMs: z.number().int().optional().describe('Pause between process starts in a multi-process operation (default 0)'),
         processes: z
           .array(
@@ -536,6 +542,31 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
   );
 
   server.registerTool(
+    'clear_build_cache',
+    {
+      title: 'Clear build cache',
+      description:
+        "Run the app's configured 'clean' command to completion (logged like prepare, under <app>/clean): clears build outputs / package caches so the NEXT build restores fresh packages. " +
+        'Does not stop running processes — restart the app afterwards to rebuild and pick up refreshed packages.',
+      inputSchema: {
+        app: z.string().describe('App name (see list_apps)'),
+        reason: z.string().describe('Why you are clearing the build cache, e.g. "pick up new internal package versions"'),
+      },
+    },
+    async ({ app, reason }) => {
+      controller.requireApp(app);
+      const conflict = controller.checkConflict(app, actor, false);
+      if (conflict) return text(conflict.message);
+      try {
+        const msg = await controller.runClean(app, reason, actor);
+        return text(msg);
+      } catch (err: any) {
+        return text(`Clean failed for '${app}': ${err.message}`);
+      }
+    }
+  );
+
+  server.registerTool(
     'remove_app',
     {
       title: 'Remove app',
@@ -547,11 +578,18 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       const conflict = controller.checkConflict(app, actor, false);
       if (conflict) return text(conflict.message);
       for (const p of appDef.processes) await controller.pm.stop(app, p.name);
-      controller.config.removeApp(app);
+      const removed = controller.config.removeApp(app);
       controller.store.releaseLease(app);
       controller.store.audit({
-        session: actor.session, source: 'mcp', action: 'remove_app', app, detail: reason, result: 'removed',
+        session: actor.session, source: 'mcp', action: 'remove_app', app, detail: reason, result: removed ? 'removed' : 'not-removable',
       });
+      const stillFrom = controller.config.sourceOf(app);
+      if (!removed && stillFrom) {
+        return text(`App '${app}' is provided by a shared config file: ${stillFrom}. To drop it, remove that file from the 'include:' list in apps.yaml (or edit the shared file).`);
+      }
+      if (removed && stillFrom) {
+        return text(`Personal definition of '${app}' removed — the app is still provided by shared config ${stillFrom}.`);
+      }
       return text(`App '${app}' removed.`);
     }
   );

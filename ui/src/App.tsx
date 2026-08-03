@@ -7,6 +7,36 @@ import { ThemeProvider } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppCard } from '@/components/app-card'
+import { Toaster } from 'sonner'
+import { useTheme } from '@/lib/theme'
+
+/** Theme-synced, understated toasts: card surface, subtle border, colored icon only. */
+function AppToaster() {
+  const { resolved } = useTheme()
+  return (
+    <Toaster
+      position="bottom-right"
+      theme={resolved}
+      closeButton
+      gap={8}
+      toastOptions={{
+        duration: 5000,
+        classNames: {
+          toast: '!bg-card !text-foreground !border-border !shadow-lg !rounded-lg',
+          title: '!text-[13px] !font-medium',
+          description: '!text-xs !text-muted-foreground',
+          closeButton: '!bg-card !border-border !text-muted-foreground hover:!text-foreground',
+          // status color lives in the icon only — same palette as the process dots
+          success: '[&_[data-icon]]:!text-emerald-500',
+          error: '[&_[data-icon]]:!text-red-500',
+          warning: '[&_[data-icon]]:!text-amber-500',
+          info: '[&_[data-icon]]:!text-sky-500',
+          loading: '[&_[data-icon]]:!text-muted-foreground',
+        },
+      }}
+    />
+  )
+}
 import { AppView } from '@/components/app-view'
 import { AlarmsBell } from '@/components/alarms-bell'
 import { CommandPalette } from '@/components/command-palette'
@@ -41,12 +71,39 @@ function Dashboard() {
       return next
     })
 
-  const toggleCollapse = (name: string) =>
-    setCollapsed((prev) => {
-      const next = prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-      savePref('appctrl-collapsed', next)
-      return next
-    })
+  // Apps with nothing running are collapsed by default; an explicit expand is remembered.
+  const [expandedStopped, setExpandedStopped] = useState<string[]>(() => loadPref('appctrl-expanded'))
+  const isAppCollapsed = (app: AppInfo) => {
+    if (collapsed.includes(app.name)) return true
+    const anyRunning = app.processes.some((p) => p.status === 'running')
+    return !anyRunning && !expandedStopped.includes(app.name)
+  }
+  const toggleCollapse = (app: AppInfo) => {
+    if (isAppCollapsed(app)) {
+      setCollapsed((prev) => {
+        const next = prev.filter((x) => x !== app.name)
+        savePref('appctrl-collapsed', next)
+        return next
+      })
+      setExpandedStopped((prev) => {
+        const next = prev.includes(app.name) ? prev : [...prev, app.name]
+        savePref('appctrl-expanded', next)
+        return next
+      })
+    } else {
+      setCollapsed((prev) => {
+        const next = [...prev.filter((x) => x !== app.name), app.name]
+        savePref('appctrl-collapsed', next)
+        return next
+      })
+      setExpandedStopped((prev) => {
+        const next = prev.filter((x) => x !== app.name)
+        savePref('appctrl-expanded', next)
+        return next
+      })
+    }
+  }
+
 
   // Pinned apps first (in pin order), the rest in config order
   const sortedApps = useMemo(() => {
@@ -236,9 +293,9 @@ function Dashboard() {
                         <AppCard
                           app={app}
                           pinned={pinned.includes(app.name)}
-                          collapsed={collapsed.includes(app.name)}
+                          collapsed={isAppCollapsed(app)}
                           onTogglePin={() => togglePin(app.name)}
-                          onToggleCollapse={() => toggleCollapse(app.name)}
+                          onToggleCollapse={() => toggleCollapse(app)}
                           onOpen={() => openApp(app.name)}
                           onLogs={(proc) => dockRef.current?.open(app.name, proc)}
                           onEdit={() => { setEditApp(app); setFormOpen(true) }}
@@ -280,6 +337,7 @@ export default function App() {
     <ThemeProvider>
       <TooltipProvider delayDuration={200}>
         <Dashboard />
+        <AppToaster />
       </TooltipProvider>
     </ThemeProvider>
   )

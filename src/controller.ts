@@ -43,6 +43,8 @@ export interface ProcResult {
 export class Controller {
   public health?: HealthMonitor;
   public metrics?: MetricsMonitor;
+  /** Daemon build info (git commit, dist build time, boot time) — shown in the UI. */
+  public versionInfo?: { commit: string; builtAt: number | null; startedAt: number };
   private queue = new KeyedQueue();
   /** In-flight `prepare` runs per app — concurrent multi-starts share one build. */
   private preparing = new Map<string, Promise<void>>();
@@ -74,6 +76,37 @@ export class Controller {
       });
     }
     await inFlight;
+  }
+
+  /**
+   * Run the app's `clean` command to completion (clear build caches / packages so the
+   * next build restores everything fresh). Invalidates the prepare reuse window so the
+   * next start/restart runs a full prepare.
+   */
+  async runClean(appName: string, reason: string, actor: ActorCtx): Promise<string> {
+    const app = this.requireApp(appName);
+    if (!app.clean) {
+      throw new Error(`App '${appName}' has no 'clean' command configured. Add a 'clean:' entry to its definition.`);
+    }
+    this.store.audit({
+      session: actor.session, source: actor.source, action: 'clean',
+      app: appName, proc: 'clean', detail: reason, result: 'started',
+    });
+    try {
+      await this.pm.runToCompletion(app, 'clean', app.clean, app.cleanTimeoutMs);
+    } catch (err: any) {
+      this.store.audit({
+        session: actor.session, source: actor.source, action: 'clean',
+        app: appName, proc: 'clean', detail: reason, result: `error: ${err.message}`,
+      });
+      throw err;
+    }
+    this.preparedAt.delete(appName);
+    this.store.audit({
+      session: actor.session, source: actor.source, action: 'clean',
+      app: appName, proc: 'clean', detail: reason, result: 'ok',
+    });
+    return `Build cache cleared for '${appName}' — the next build will restore fresh packages (see logs of '${appName}/clean').`;
   }
 
   /**
@@ -476,6 +509,8 @@ export class Controller {
         environments: app.environments,
         activeEnvironment: app.activeEnvironment ?? null,
         prepare: app.prepare ?? null,
+        clean: app.clean ?? null,
+        source: this.config.sourceOf(app.name) ?? null,
         staggerMs: app.staggerMs,
         preparing: this.preparing.has(app.name),
         lastStart: this.lastStart.get(app.name) ?? null,

@@ -201,9 +201,9 @@ export class Store {
     else this.db.prepare(`DELETE FROM restore_state WHERE app = ?`).run(app);
   }
 
-  listRunning(): { app: string; proc: string; mode: string; pid: number | null }[] {
-    return this.db.prepare(`SELECT app, proc, mode, pid FROM restore_state`).all() as {
-      app: string; proc: string; mode: string; pid: number | null;
+  listRunning(): { app: string; proc: string; mode: string; pid: number | null; updatedAt: number | null }[] {
+    return this.db.prepare(`SELECT app, proc, mode, pid, updated_at AS updatedAt FROM restore_state`).all() as {
+      app: string; proc: string; mode: string; pid: number | null; updatedAt: number | null;
     }[];
   }
 
