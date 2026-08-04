@@ -45,6 +45,8 @@ export interface AppInfo {
   environments: Record<string, Record<string, string>>
   activeEnvironment: string | null
   prepare: string | null
+  /** When a restart runs prepare: kill first ('after-stop', default) or build first ('before-stop') */
+  prepareOrder: 'after-stop' | 'before-stop'
   clean: string | null
   /** include file the definition comes from (shared repo config), or null if personal */
   source: string | null
@@ -115,6 +117,7 @@ export interface AppDefInput {
   environments?: Record<string, Record<string, string>>
   activeEnvironment?: string
   prepare?: string
+  prepareOrder?: 'after-stop' | 'before-stop'
   clean?: string
   staggerMs?: number
   processes: {

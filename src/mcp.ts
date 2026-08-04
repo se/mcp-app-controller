@@ -508,6 +508,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         cwd: z.string().describe('Absolute path to the app root directory'),
         prepare: z.string().optional().describe('Optional build-once command run to completion before every start/restart of this app (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
         prepareTimeoutMs: z.number().int().optional().describe('Timeout for the prepare command in ms (default 600000)'),
+        prepareOrder: z.enum(['after-stop', 'before-stop']).optional().describe("When a RESTART runs 'prepare': 'after-stop' (default) kills the old process(es) first, then builds — no file locks from the running app, and anything responding after the restart is the fresh build; 'before-stop' builds while the old process keeps serving — less downtime, and a failed build leaves the app running"),
         clean: z.string().optional().describe('Optional one-shot "clear build cache" command run on demand via clear_build_cache — e.g. delete build outputs and clear the package cache so the next build restores fresh packages'),
         cleanTimeoutMs: z.number().int().optional().describe('Timeout for the clean command in ms (default 600000)'),
         staggerMs: z.number().int().optional().describe('Pause between process starts in a multi-process operation (default 0)'),

@@ -31,6 +31,11 @@ apps:
     # same projects concurrently. Single-process starts skip it.
     prepare: dotnet build MyBackend.sln
     prepareTimeoutMs: 600000            # optional, default 10 min
+    # When a RESTART runs prepare: 'after-stop' (default) kills the old processes
+    # first, then builds (no file locks from the running app, restart always serves
+    # the fresh build); 'before-stop' builds while the old process keeps serving
+    # (less downtime; a failed build leaves the app running).
+    prepareOrder: after-stop
     staggerMs: 1000                     # optional pause between process starts (ms)
     processes:
       - name: api

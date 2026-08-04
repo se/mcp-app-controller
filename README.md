@@ -56,6 +56,13 @@ Two optional app-level settings fix this:
   `--no-build` launchers for instant starts. Output is logged as pseudo-process
   `<app>/prepare` (visible via `app_logs`); non-zero exit or timeout
   (`prepareTimeoutMs`, default 10 min) aborts the operation.
+- `prepareOrder: after-stop | before-stop` — when a **restart** runs `prepare`.
+  `after-stop` (default) kills the old process(es) first, then builds: the running
+  app can't lock build outputs (e.g. .NET DLLs) or compete with the build for
+  CPU/RAM, and anything responding after the restart is guaranteed to be the fresh
+  build. `before-stop` builds while the old process keeps serving: less downtime,
+  and a failed build leaves the app running — useful for long builds where staying
+  up matters more. Plain starts are unaffected (nothing is running to stop).
 - `staggerMs: <n>` — pause between process starts in a multi-process operation, to
   spread the CPU/RAM spikes of heavy dev servers (webpack etc.).
 

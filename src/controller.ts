@@ -432,6 +432,25 @@ export class Controller {
     if (conflict) return conflict;
     const procs = this.selectProcesses(app, proc);
     const t0 = Date.now();
+    // Capture each process's current mode BEFORE anything stops it — getState only
+    // reports a mode while the process is running.
+    const prevModes = new Map(procs.map((p) => [p.name, this.pm.getState(appName, p.name).mode]));
+    // prepareOrder 'after-stop' (default): kill the old processes FIRST, then build.
+    // The running app can't lock build outputs or steal CPU from the build, and
+    // nothing stale keeps serving while the build runs — anything responding after
+    // the restart is the fresh build. ('before-stop' trades that for less downtime:
+    // build while the old process serves; a failed build leaves the app running.)
+    if (app.prepare && app.prepareOrder === 'after-stop') {
+      await Promise.all(
+        procs.map((p) =>
+          this.queue.enqueue(
+            `${appName}/${p.name}`,
+            `stop(restart) by ${actor.session}`,
+            () => this.pm.stop(appName, p.name)
+          )
+        )
+      );
+    }
     const prepErr = await this.prepareForStart(app, actor, reason);
     if (prepErr) return procs.map((p) => ({ proc: p.name, state: this.pm.getState(appName, p.name), error: prepErr }));
     const prepareMs = Date.now() - t0;
@@ -446,7 +465,7 @@ export class Controller {
             `restart by ${actor.session}`,
             async (): Promise<ProcResult> => {
               const prev = this.pm.getState(appName, p.name);
-              const nextMode: Mode = mode ?? prev.mode ?? 'start';
+              const nextMode: Mode = mode ?? prev.mode ?? prevModes.get(p.name) ?? 'start';
               try {
                 await this.pm.stop(appName, p.name);
                 const depErr = await this.ensureDeps(app, p, nextMode, actor, takeover);
@@ -509,6 +528,7 @@ export class Controller {
         environments: app.environments,
         activeEnvironment: app.activeEnvironment ?? null,
         prepare: app.prepare ?? null,
+        prepareOrder: app.prepareOrder,
         clean: app.clean ?? null,
         source: this.config.sourceOf(app.name) ?? null,
         envOrigins: this.config.envOriginsOf(app.name),

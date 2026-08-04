@@ -43,6 +43,12 @@ export const AppDefSchema = z
     // `--no-build` launch commands safe (the build is always fresh at spawn time).
     prepare: z.string().optional(),
     prepareTimeoutMs: z.number().int().min(1000).default(600000),
+    // When a RESTART runs `prepare`: 'after-stop' (default) kills the old process(es)
+    // FIRST, then builds — the running app never locks build outputs, never competes
+    // with the build for CPU/RAM, and anything responding after the restart is
+    // guaranteed to be the fresh build. 'before-stop' builds while the old process
+    // keeps serving — less downtime, and a failed build leaves the app running.
+    prepareOrder: z.enum(['after-stop', 'before-stop']).default('after-stop'),
     // One-shot "clear build cache" command (run in the app cwd, same env layering).
     // Invoked on demand via the clear_build_cache MCP tool / UI — e.g. delete obj/bin
     // and clear the package manager's cache so the NEXT build restores fresh packages.
@@ -584,6 +590,7 @@ export class ConfigStore {
     if (def.activeEnvironment) out.activeEnvironment = def.activeEnvironment;
     if (def.prepare) out.prepare = def.prepare;
     if (def.prepareTimeoutMs !== 600000) out.prepareTimeoutMs = def.prepareTimeoutMs;
+    if (def.prepareOrder !== 'after-stop') out.prepareOrder = def.prepareOrder;
     if (def.clean) out.clean = def.clean;
     if (def.cleanTimeoutMs !== 600000) out.cleanTimeoutMs = def.cleanTimeoutMs;
     if (def.staggerMs > 0) out.staggerMs = def.staggerMs;

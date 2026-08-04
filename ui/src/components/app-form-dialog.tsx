@@ -9,6 +9,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
@@ -58,6 +65,7 @@ export function AppFormDialog({
   const [description, setDescription] = useState('')
   const [cwd, setCwd] = useState('')
   const [prepare, setPrepare] = useState('')
+  const [prepareOrder, setPrepareOrder] = useState<'after-stop' | 'before-stop'>('after-stop')
   const [clean, setClean] = useState('')
   const [staggerMs, setStaggerMs] = useState('')
   const [procs, setProcs] = useState<ProcForm[]>([{ ...emptyProc }])
@@ -72,6 +80,7 @@ export function AppFormDialog({
       setDescription(editApp.description)
       setCwd(editApp.cwd)
       setPrepare(editApp.prepare ?? '')
+      setPrepareOrder(editApp.prepareOrder ?? 'after-stop')
       setClean(editApp.clean ?? '')
       setStaggerMs(editApp.staggerMs > 0 ? String(editApp.staggerMs) : '')
       setProcs(
@@ -94,6 +103,8 @@ export function AppFormDialog({
       setDescription('')
       setCwd('')
       setPrepare('')
+      setPrepareOrder('after-stop')
+      setClean('')
       setStaggerMs('')
       setProcs([{ ...emptyProc }])
     }
@@ -118,7 +129,7 @@ export function AppFormDialog({
             ...(editApp.activeEnvironment ? { activeEnvironment: editApp.activeEnvironment } : {}),
           }
         : {}),
-      ...(prepare.trim() ? { prepare: prepare.trim() } : {}),
+      ...(prepare.trim() ? { prepare: prepare.trim(), prepareOrder } : {}),
       ...(clean.trim() ? { clean: clean.trim() } : {}),
       ...(Number(staggerMs) > 0 ? { staggerMs: Number(staggerMs) } : {}),
       processes: procs.map((p) => ({
@@ -188,6 +199,24 @@ export function AppFormDialog({
                 placeholder="0" inputMode="numeric" className="text-xs" />
             </div>
           </div>
+          {prepare.trim() !== '' && (
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Restart order</Label>
+              <Select value={prepareOrder} onValueChange={(v) => setPrepareOrder(v as 'after-stop' | 'before-stop')}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="after-stop" className="text-xs">
+                    Kill first, then build — no file locks; restart always serves the fresh build (default)
+                  </SelectItem>
+                  <SelectItem value="before-stop" className="text-xs">
+                    Build first, then kill — old process keeps serving during the build; failed build leaves it running
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label className="text-xs" htmlFor="app-clean">Clean command<span className="font-normal text-muted-foreground">optional</span></Label>
             <Input id="app-clean" value={clean} onChange={(e) => setClean(e.target.value)}
