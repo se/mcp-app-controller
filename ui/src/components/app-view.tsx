@@ -355,9 +355,18 @@ export function AppView({
           </TableHeader>
           <TableBody>
             {app.processes.map((p) => (
-              <TableRow key={p.name}>
+              <TableRow key={p.name} className="group/proc">
                 <TableCell>
-                  <div className="text-sm font-medium">{p.name}</div>
+                  <div className="flex items-center gap-1.5 text-sm font-medium">
+                    {p.name}
+                    <button
+                      onClick={() => void revealInFinder(app.name, p.name).catch(() => {})}
+                      title="Show in Finder"
+                      className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/proc:opacity-100"
+                    >
+                      <FolderOpen className="size-3" />
+                    </button>
+                  </div>
                   <div className="max-w-72 truncate font-mono text-[11px] text-muted-foreground"
                     title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}>
                     {p.status === 'crashed' && p.lastExit?.summary ? (

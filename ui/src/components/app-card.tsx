@@ -356,10 +356,17 @@ function AppCardInner({
         {app.processes.map((p) => (
           <div key={p.name}>
             <Separator />
-            <div className="grid items-center gap-x-3 px-5 py-2" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+            <div className="group/proc grid items-center gap-x-3 px-5 py-2" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
               <StatusDot p={p} />
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate text-sm font-medium">{p.name}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); void revealInFinder(app.name, p.name).catch((err) => toast.error(err.message)) }}
+                  title="Show in Finder"
+                  className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/proc:opacity-100"
+                >
+                  <FolderOpen className="size-3" />
+                </button>
                 {p.status === 'running' && p.mode === 'dev' && (
                   <Badge variant="outline" className="h-4 border-sky-500/40 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400">dev</Badge>
                 )}
