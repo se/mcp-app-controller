@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/table'
 import { saveAppEnv, type AppInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Check, Plus, Trash2 } from 'lucide-react'
+import { Check, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 /** One flat row of the environment table. Scope: 'app' | 'set:<name>' | 'proc:<name>'. */
@@ -91,6 +91,17 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
   const [scopeFilter, setScopeFilter] = useState('all')
   const [newSet, setNewSet] = useState('')
   const [draft, setDraft] = useState({ scope: 'app', key: '', value: '' })
+  // Values are masked by default — they may contain secrets
+  const [revealAll, setRevealAll] = useState(false)
+  const [revealed, setRevealed] = useState<Set<number>>(new Set())
+  const isRevealed = (id: number) => revealAll || revealed.has(id)
+  const toggleReveal = (id: number) =>
+    setRevealed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   useEffect(() => {
     const b = buildRows()
@@ -232,6 +243,10 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
             </Button>
           )}
         </div>
+        <Button variant="outline" size="sm" className="h-7 text-xs"
+          onClick={() => { setRevealAll((v) => !v); setRevealed(new Set()) }}>
+          {revealAll ? <><EyeOff className="size-3.5" /> Hide all</> : <><Eye className="size-3.5" /> Reveal all</>}
+        </Button>
         <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
           {filtered.length} / {rows.length} vars
         </span>
@@ -266,8 +281,22 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
                     className="h-7 border-transparent bg-transparent font-mono text-xs shadow-none hover:border-input focus-visible:border-input" />
                 </TableCell>
                 <TableCell>
-                  <Input value={r.value} onChange={(e) => update(r.id, { value: e.target.value })}
-                    className="h-7 border-transparent bg-transparent font-mono text-xs shadow-none hover:border-input focus-visible:border-input" />
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type={isRevealed(r.id) ? 'text' : 'password'}
+                      value={r.value}
+                      onChange={(e) => update(r.id, { value: e.target.value })}
+                      autoComplete="off"
+                      className="h-7 border-transparent bg-transparent font-mono text-xs shadow-none hover:border-input focus-visible:border-input"
+                    />
+                    <button
+                      onClick={() => toggleReveal(r.id)}
+                      title={isRevealed(r.id) ? 'Hide value' : 'Reveal value'}
+                      className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      {isRevealed(r.id) ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    </button>
+                  </div>
                 </TableCell>
                 <TableCell className="text-[11px]">
                   {inactive ? (
