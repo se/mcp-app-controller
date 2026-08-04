@@ -401,6 +401,22 @@ export function createHttpServer(controller: Controller) {
   api.put('/apps/:app/env', (req, res) => {
     try {
       controller.requireApp(req.params.app);
+      // Include-provided app + per-var origins → split-write: 'shared' vars into the
+      // shared include file, 'local' vars (and activeEnvironment) into X.local.yaml.
+      // No fork — the app stays shared.
+      if (controller.config.sourceOf(req.params.app) !== undefined && req.body?.origins) {
+        const { env = {}, environments = {}, activeEnvironment, processEnv = {}, origins } = req.body;
+        const result = controller.config.saveIncludedAppEnv(req.params.app, {
+          env, environments, activeEnvironment: activeEnvironment || undefined, processEnv, origins,
+        });
+        controller.store.audit({
+          session: 'ui', source: 'ui', action: 'env-updated', app: req.params.app,
+          detail: `split-write: shared=${result.sharedChanged ? path.basename(result.sharedFile) : 'unchanged'}, local=${path.basename(result.localFile)}`,
+          result: 'saved',
+        });
+        res.json({ ok: true, restartRequired: true, sharedFile: result.sharedFile, localFile: result.localFile, sharedChanged: result.sharedChanged });
+        return;
+      }
       // Copy-on-write: editing an include-provided app forks a personal copy into apps.yaml
       const appDef = controller.config.materialize(req.params.app)!;
       const { env, environments, activeEnvironment, processEnv } = req.body ?? {};

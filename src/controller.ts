@@ -511,6 +511,7 @@ export class Controller {
         prepare: app.prepare ?? null,
         clean: app.clean ?? null,
         source: this.config.sourceOf(app.name) ?? null,
+        envOrigins: this.config.envOriginsOf(app.name),
         staggerMs: app.staggerMs,
         preparing: this.preparing.has(app.name),
         lastStart: this.lastStart.get(app.name) ?? null,

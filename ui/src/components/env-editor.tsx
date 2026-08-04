@@ -29,6 +29,37 @@ interface EnvRow {
   scope: string
   key: string
   value: string
+  /** Storage target for include-provided apps: shared team file vs machine-local override. */
+  origin: 'shared' | 'local'
+}
+
+function StoreBadge({
+  origin,
+  shared,
+  onToggle,
+}: {
+  origin: 'shared' | 'local'
+  shared: string
+  onToggle: () => void
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      title={
+        origin === 'shared'
+          ? `Stored in the SHARED config (committed, whole team gets it):\n${shared}\n\nClick to make it machine-local instead.`
+          : `Stored in your machine-local override (gitignored .local.yaml — only this machine).\n\nClick to move it into the shared config:\n${shared}`
+      }
+      className={cn(
+        'rounded-md border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+        origin === 'shared'
+          ? 'border-violet-500/50 text-violet-600 hover:bg-violet-500/10 dark:text-violet-400'
+          : 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400'
+      )}
+    >
+      {origin}
+    </button>
+  )
 }
 
 const scopeLabel = (scope: string) =>
@@ -72,14 +103,16 @@ function ScopeBadge({ scope, active }: { scope: string; active: string }) {
  */
 export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => void }) {
   let nextId = useMemo(() => ({ n: 0 }), [app.name]) // eslint-disable-line react-hooks/exhaustive-deps
+  const isShared = !!app.source
   const buildRows = (): { rows: EnvRow[]; sets: string[] } => {
     const rows: EnvRow[] = []
-    const push = (scope: string, rec: Record<string, string>) => {
-      for (const [key, value] of Object.entries(rec)) rows.push({ id: nextId.n++, scope, key, value })
+    const push = (scope: string, rec: Record<string, string>, origins?: Record<string, 'shared' | 'local'>) => {
+      for (const [key, value] of Object.entries(rec))
+        rows.push({ id: nextId.n++, scope, key, value, origin: origins?.[key] ?? 'local' })
     }
-    push('app', app.env)
-    for (const [set, rec] of Object.entries(app.environments)) push(`set:${set}`, rec)
-    for (const p of app.processes) push(`proc:${p.name}`, p.env)
+    push('app', app.env, app.envOrigins?.env)
+    for (const [set, rec] of Object.entries(app.environments)) push(`set:${set}`, rec, app.envOrigins?.environments[set])
+    for (const p of app.processes) push(`proc:${p.name}`, p.env, app.envOrigins?.processes[p.name])
     return { rows, sets: Object.keys(app.environments) }
   }
 
@@ -90,7 +123,9 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
   const [query, setQuery] = useState('')
   const [scopeFilter, setScopeFilter] = useState('all')
   const [newSet, setNewSet] = useState('')
-  const [draft, setDraft] = useState({ scope: 'app', key: '', value: '' })
+  const [draft, setDraft] = useState<{ scope: string; key: string; value: string; origin: 'shared' | 'local' }>({
+    scope: 'app', key: '', value: '', origin: 'local',
+  })
   // Values are masked by default — they may contain secrets
   const [revealAll, setRevealAll] = useState(false)
   const [revealed, setRevealed] = useState<Set<number>>(new Set())
@@ -157,9 +192,30 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
         else if (r.scope.startsWith('set:')) (environments[r.scope.slice(4)] ??= {})[key] = r.value
         else (processEnv[r.scope.slice(5)] ??= {})[key] = r.value
       }
-      await saveAppEnv(app.name, { env, environments, activeEnvironment: active, processEnv })
+      const origins = isShared
+        ? {
+            env: Object.fromEntries(rows.filter((r) => r.scope === 'app' && r.key.trim()).map((r) => [r.key.trim(), r.origin])),
+            environments: Object.fromEntries(
+              sets.map((s) => [
+                s,
+                Object.fromEntries(rows.filter((r) => r.scope === `set:${s}` && r.key.trim()).map((r) => [r.key.trim(), r.origin])),
+              ])
+            ),
+            processes: Object.fromEntries(
+              app.processes.map((p) => [
+                p.name,
+                Object.fromEntries(rows.filter((r) => r.scope === `proc:${p.name}` && r.key.trim()).map((r) => [r.key.trim(), r.origin])),
+              ])
+            ),
+          }
+        : undefined
+      const result = await saveAppEnv(app.name, { env, environments, activeEnvironment: active, processEnv, origins })
       setDirty(false)
-      toast.success('Environment saved — restart processes to apply.')
+      toast.success(
+        isShared
+          ? `Saved — ${result.sharedChanged ? 'shared config updated, ' : ''}local overrides in .local.yaml. Restart to apply.`
+          : 'Environment saved — restart processes to apply.'
+      )
       onChanged()
     } catch (err) {
       toast.error((err as Error).message)
@@ -169,7 +225,7 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
   const addDraft = () => {
     const key = draft.key.trim()
     if (!key) return
-    setRows((prev) => [...prev, { id: nextId.n++, scope: draft.scope, key, value: draft.value }])
+    setRows((prev) => [...prev, { id: nextId.n++, scope: draft.scope, key, value: draft.value, origin: isShared ? draft.origin : 'local' }])
     setDraft((d) => ({ ...d, key: '', value: '' }))
     setDirty(true)
   }
@@ -259,13 +315,14 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
             <TableHead className="w-72">Variable</TableHead>
             <TableHead>Value</TableHead>
             <TableHead className="w-28">Effective</TableHead>
+            {isShared && <TableHead className="w-20">Store</TableHead>}
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+              <TableCell colSpan={isShared ? 6 : 5} className="py-8 text-center text-xs text-muted-foreground">
                 {rows.length === 0 ? 'No variables defined yet — add one below.' : 'No variables match the filter.'}
               </TableCell>
             </TableRow>
@@ -309,6 +366,12 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
                     <span className="text-emerald-600 dark:text-emerald-400">applies</span>
                   )}
                 </TableCell>
+                {isShared && (
+                  <TableCell>
+                    <StoreBadge origin={r.origin} shared={app.source!}
+                      onToggle={() => update(r.id, { origin: r.origin === 'shared' ? 'local' : 'shared' })} />
+                  </TableCell>
+                )}
                 <TableCell>
                   <Button variant="ghost" size="icon-xs" title="Remove variable"
                     className="text-muted-foreground hover:text-red-500"
@@ -339,10 +402,23 @@ export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => voi
                 onKeyDown={(e) => e.key === 'Enter' && addDraft()}
                 placeholder="value" className="h-7 font-mono text-xs" />
             </TableCell>
-            <TableCell colSpan={2}>
-              <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!draft.key.trim()} onClick={addDraft}>
-                <Plus className="size-3" /> Add
-              </Button>
+            <TableCell colSpan={isShared ? 3 : 2}>
+              <div className="flex items-center gap-2">
+                {isShared && (
+                  <Select value={draft.origin} onValueChange={(v) => setDraft((d) => ({ ...d, origin: v as 'shared' | 'local' }))}>
+                    <SelectTrigger size="sm" className="h-7 w-24 text-xs" title="Where the new variable is stored">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="local">local</SelectItem>
+                      <SelectItem value="shared">shared</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+                <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!draft.key.trim()} onClick={addDraft}>
+                  <Plus className="size-3" /> Add
+                </Button>
+              </div>
             </TableCell>
           </TableRow>
         </TableBody>

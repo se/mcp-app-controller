@@ -159,6 +159,9 @@ export class ConfigStore {
   private includedApps: AppDef[] = [];
   /** app name -> include file it came from (with note when a .local.yaml was merged) */
   private appOrigins = new Map<string, string>();
+  /** Pre-merge raw layers of included apps — needed to know, per env var, whether it
+   * lives in the shared file or the developer's .local.yaml override. */
+  private includedRaw = new Map<string, { file: string; localFile: string; shared: Raw | null; local: Raw | null }>();
   /** include entries exactly as written in apps.yaml (preserved on save) */
   include: string[] = [];
   private includeFiles: { file: string; localFile: string }[] = [];
@@ -222,6 +225,7 @@ export class ConfigStore {
   private loadIncludes(): void {
     this.includedApps = [];
     this.appOrigins.clear();
+    this.includedRaw.clear();
     this.includeFiles = [];
     const baseDir = path.dirname(this.filePath);
     for (const entry of this.include) {
@@ -269,6 +273,12 @@ export class ConfigStore {
           }
           this.includedApps.push(def);
           this.appOrigins.set(def.name, rawLocal ? `${file} (+ ${path.basename(localFile)})` : file);
+          this.includedRaw.set(def.name, {
+            file,
+            localFile,
+            shared: ((Array.isArray(rawMain.apps) ? (rawMain.apps as Raw[]) : []).find((a) => a?.name === def.name) as Raw) ?? null,
+            local: (localApps.find((a) => a?.name === def.name) as Raw) ?? null,
+          });
         } catch (err) {
           console.error(`[config] invalid app definition in ${file} (skipped):`, err);
         }
@@ -391,6 +401,177 @@ export class ConfigStore {
   sourceFileOf(name: string): string | undefined {
     const origin = this.appOrigins.get(name);
     return origin ? origin.split(' (+')[0] : undefined;
+  }
+
+  /**
+   * Per-variable storage of an included app's env: 'local' when the key comes from
+   * the developer's X.local.yaml override, 'shared' when it comes from the shared
+   * include file. null for apps owned by apps.yaml (everything is local there).
+   */
+  envOriginsOf(name: string): {
+    env: Record<string, 'shared' | 'local'>;
+    environments: Record<string, Record<string, 'shared' | 'local'>>;
+    processes: Record<string, Record<string, 'shared' | 'local'>>;
+  } | null {
+    if (this.sourceOf(name) === undefined) return null;
+    const info = this.includedRaw.get(name);
+    const def = this.getApp(name);
+    if (!info || !def) return null;
+    const local = info.local ?? {};
+    const localEnv = (local.env as Record<string, string>) ?? {};
+    const localEnvs = (local.environments as Record<string, Record<string, string>>) ?? {};
+    const localProcs = (Array.isArray(local.processes) ? (local.processes as Raw[]) : []);
+    const originFor = (key: string, localRec: Record<string, string> | undefined): 'shared' | 'local' =>
+      localRec && key in localRec ? 'local' : 'shared';
+    return {
+      env: Object.fromEntries(Object.keys(def.env).map((k) => [k, originFor(k, localEnv)])),
+      environments: Object.fromEntries(
+        Object.entries(def.environments).map(([set, rec]) => [
+          set,
+          Object.fromEntries(Object.keys(rec).map((k) => [k, originFor(k, localEnvs[set])])),
+        ])
+      ),
+      processes: Object.fromEntries(
+        def.processes.map((p) => {
+          const lp = localProcs.find((x) => x?.name === p.name);
+          const lpEnv = (lp?.env as Record<string, string>) ?? undefined;
+          return [p.name, Object.fromEntries(Object.keys(p.env).map((k) => [k, originFor(k, lpEnv)]))];
+        })
+      ),
+    };
+  }
+
+  /**
+   * Persist env changes of an INCLUDED app, split by ownership: 'shared'-marked vars
+   * go into the shared include file (surgical YAML-document edit — comments and the
+   * rest of the file are preserved), 'local'-marked vars and activeEnvironment go
+   * into the sibling X.local.yaml (per-developer, gitignored). A key flipped from
+   * shared to local keeps its original value in the shared file (the local value
+   * merely overrides it on this machine).
+   */
+  saveIncludedAppEnv(
+    name: string,
+    payload: {
+      env: Record<string, string>;
+      environments: Record<string, Record<string, string>>;
+      activeEnvironment?: string;
+      processEnv: Record<string, Record<string, string>>;
+      origins: {
+        env: Record<string, string>;
+        environments: Record<string, Record<string, string>>;
+        processes: Record<string, Record<string, string>>;
+      };
+    }
+  ): { sharedFile: string; localFile: string; sharedChanged: boolean } {
+    const info = this.includedRaw.get(name);
+    if (!info) throw new Error(`App '${name}' is not provided by an include file`);
+    const sharedOrig = info.shared ?? {};
+
+    const split = (
+      merged: Record<string, string>,
+      origins: Record<string, string>,
+      sharedPrev: Record<string, string> | undefined
+    ): { shared: Record<string, string>; local: Record<string, string> } => {
+      const shared: Record<string, string> = {};
+      const local: Record<string, string> = {};
+      for (const [k, v] of Object.entries(merged)) {
+        if ((origins[k] ?? 'local') === 'shared') shared[k] = v;
+        else {
+          local[k] = v;
+          // flipped shared→local: keep the team's value in the shared file
+          if (sharedPrev && k in sharedPrev) shared[k] = sharedPrev[k];
+        }
+      }
+      return { shared, local };
+    };
+
+    const envSplit = split(payload.env, payload.origins.env, sharedOrig.env as Record<string, string>);
+    const sharedEnvs: Record<string, Record<string, string>> = {};
+    const localEnvs: Record<string, Record<string, string>> = {};
+    const sharedOrigEnvs = (sharedOrig.environments as Record<string, Record<string, string>>) ?? {};
+    for (const [set, rec] of Object.entries(payload.environments)) {
+      const s = split(rec, payload.origins.environments[set] ?? {}, sharedOrigEnvs[set]);
+      if (Object.keys(s.shared).length > 0 || set in sharedOrigEnvs) sharedEnvs[set] = s.shared;
+      if (Object.keys(s.local).length > 0) localEnvs[set] = s.local;
+    }
+    const sharedProcs: Record<string, Record<string, string>> = {};
+    const localProcs: Record<string, Record<string, string>> = {};
+    const sharedOrigProcs = (Array.isArray(sharedOrig.processes) ? (sharedOrig.processes as Raw[]) : []);
+    for (const [proc, rec] of Object.entries(payload.processEnv)) {
+      const prev = (sharedOrigProcs.find((p) => p?.name === proc)?.env as Record<string, string>) ?? undefined;
+      const s = split(rec, payload.origins.processes[proc] ?? {}, prev);
+      sharedProcs[proc] = s.shared;
+      localProcs[proc] = s.local;
+    }
+
+    // --- shared file (only when its content actually changes) ---
+    const norm = (env: unknown, envs: unknown, procs: Record<string, unknown>) =>
+      JSON.stringify({ env: env ?? {}, envs: envs ?? {}, procs });
+    const prevProcEnvs = Object.fromEntries(sharedOrigProcs.map((p) => [p?.name as string, p?.env ?? {}]));
+    const nextProcEnvs = Object.fromEntries(Object.entries(sharedProcs).filter(([, v]) => Object.keys(v).length > 0));
+    const sharedChanged =
+      norm(sharedOrig.env, sharedOrig.environments, prevProcEnvs) !==
+      norm(envSplit.shared, sharedEnvs, nextProcEnvs);
+
+    this.saving = true;
+    try {
+      if (sharedChanged) {
+        const doc = YAML.parseDocument(fs.readFileSync(info.file, 'utf8'));
+        const appsNode = doc.get('apps') as YAML.YAMLSeq | undefined;
+        const appNode = appsNode?.items.find(
+          (it) => (it as YAML.YAMLMap).get?.('name') === name
+        ) as YAML.YAMLMap | undefined;
+        if (!appNode) throw new Error(`App '${name}' not found in ${info.file}`);
+        const setOrDelete = (node: YAML.YAMLMap, key: string, value: Record<string, unknown>) => {
+          if (Object.keys(value).length > 0) node.set(key, doc.createNode(value));
+          else if (node.has(key)) node.delete(key);
+        };
+        setOrDelete(appNode, 'env', envSplit.shared);
+        setOrDelete(appNode, 'environments', Object.fromEntries(Object.entries(sharedEnvs).filter(([, v]) => Object.keys(v).length > 0)));
+        const procsNode = appNode.get('processes') as YAML.YAMLSeq | undefined;
+        for (const it of procsNode?.items ?? []) {
+          const pNode = it as YAML.YAMLMap;
+          const pName = pNode.get?.('name') as string;
+          if (pName in sharedProcs) setOrDelete(pNode, 'env', sharedProcs[pName]);
+        }
+        fs.writeFileSync(info.file, doc.toString());
+      }
+
+      // --- local override file (developer-owned; plain stringify is fine) ---
+      let localRaw: Raw = {};
+      if (fs.existsSync(info.localFile)) {
+        try { localRaw = (YAML.parse(fs.readFileSync(info.localFile, 'utf8')) as Raw) ?? {}; } catch { localRaw = {}; }
+      }
+      const localAppsArr: Raw[] = Array.isArray(localRaw.apps) ? (localRaw.apps as Raw[]) : [];
+      let entry = localAppsArr.find((a) => a?.name === name);
+      if (!entry) {
+        entry = { name };
+        localAppsArr.push(entry);
+      }
+      if (Object.keys(envSplit.local).length > 0) entry.env = envSplit.local; else delete entry.env;
+      if (Object.keys(localEnvs).length > 0) entry.environments = localEnvs; else delete entry.environments;
+      if (payload.activeEnvironment) entry.activeEnvironment = payload.activeEnvironment; else delete entry.activeEnvironment;
+      const prevProcOverrides: Raw[] = Array.isArray(entry.processes) ? (entry.processes as Raw[]) : [];
+      const nextProcOverrides: Raw[] = [];
+      const procNames = new Set([...Object.keys(localProcs), ...prevProcOverrides.map((p) => p?.name as string)]);
+      for (const pName of procNames) {
+        const prev = prevProcOverrides.find((p) => p?.name === pName) ?? { name: pName };
+        const pEntry: Raw = { ...prev };
+        const localEnv = localProcs[pName] ?? {};
+        if (Object.keys(localEnv).length > 0) pEntry.env = localEnv; else delete pEntry.env;
+        if (Object.keys(pEntry).length > 1) nextProcOverrides.push(pEntry); // more than just {name}
+      }
+      if (nextProcOverrides.length > 0) entry.processes = nextProcOverrides; else delete entry.processes;
+      const meaningful = Object.keys(entry).length > 1;
+      localRaw.apps = meaningful ? localAppsArr : localAppsArr.filter((a) => a !== entry);
+      fs.writeFileSync(info.localFile, YAML.stringify(localRaw));
+      this.lastFingerprint = this.fingerprint();
+      this.load();
+    } finally {
+      setTimeout(() => (this.saving = false), 1000);
+    }
+    bus.emit('state');
+    return { sharedFile: info.file, localFile: info.localFile, sharedChanged };
   }
 
   /** Drop schema-default values so committed shared configs stay minimal and

@@ -48,6 +48,12 @@ export interface AppInfo {
   clean: string | null
   /** include file the definition comes from (shared repo config), or null if personal */
   source: string | null
+  /** Per-var storage for include-provided apps: 'shared' (team file) or 'local' (X.local.yaml). */
+  envOrigins: {
+    env: Record<string, 'shared' | 'local'>
+    environments: Record<string, Record<string, 'shared' | 'local'>>
+    processes: Record<string, Record<string, 'shared' | 'local'>>
+  } | null
   staggerMs: number
   preparing: boolean
   /** Timing of the last whole-app start/restart (incl. prepare, until healthy) */
@@ -185,8 +191,18 @@ export const saveAppEnv = (
     environments?: Record<string, Record<string, string>>
     activeEnvironment?: string
     processEnv?: Record<string, Record<string, string>>
+    /** For include-provided apps: per-var target file ('shared' | 'local'). */
+    origins?: {
+      env: Record<string, string>
+      environments: Record<string, Record<string, string>>
+      processes: Record<string, Record<string, string>>
+    }
   }
-) => api(`/apps/${encodeURIComponent(app)}/env`, { method: 'PUT', body: JSON.stringify(payload) })
+) =>
+  api<{ ok: true; restartRequired: boolean; sharedFile?: string; localFile?: string; sharedChanged?: boolean }>(
+    `/apps/${encodeURIComponent(app)}/env`,
+    { method: 'PUT', body: JSON.stringify(payload) }
+  )
 export const getLogsAround = (app: string, proc: string, ts: string) =>
   api<{ logs: string }>(`/apps/${encodeURIComponent(app)}/logs/${encodeURIComponent(proc)}?around=${encodeURIComponent(ts)}`)
 
