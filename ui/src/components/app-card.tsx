@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, getLogs, isStarting, releaseLease, type AppInfo, type ProcInfo } from '@/lib/api'
+import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, getLogs, isStarting, releaseLease, revealInFinder, type AppInfo, type ProcInfo } from '@/lib/api'
 import { Elapsed, Uptime } from '@/components/uptime'
 import { logBus } from '@/lib/log-bus'
-import { ChevronDown, ChevronRight, Eraser, FileText, Lock, Pencil, Pin, Play, RotateCw, Square, Timer, Trash2, Wrench } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eraser, FileText, FolderOpen, Lock, Pencil, Pin, Play, RotateCw, Square, Timer, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -180,7 +180,14 @@ function AppCardInner({
                 </Badge>
               )}
             </div>
-            <div className="mt-0.5 truncate font-mono text-[11px] leading-4 text-muted-foreground/70">{app.cwd}</div>
+            <button
+              onClick={(e) => { e.stopPropagation(); void revealInFinder(app.name).catch((err) => toast.error(err.message)) }}
+              title="Show in Finder"
+              className="group/cwd mt-0.5 flex max-w-full items-center gap-1 truncate font-mono text-[11px] leading-4 text-muted-foreground/70 hover:text-foreground"
+            >
+              <FolderOpen className="size-3 shrink-0 opacity-0 transition-opacity group-hover/cwd:opacity-100" />
+              <span className="truncate group-hover/cwd:underline">{app.cwd}</span>
+            </button>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

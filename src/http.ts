@@ -1,4 +1,5 @@
 import express from 'express';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -227,6 +228,32 @@ export function createHttpServer(controller: Controller) {
         results.push({ target: t, result: r });
       }
       res.json(results);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Open an app's (or a single process's) working directory in the OS file manager.
+  // Only configured cwds can be revealed — no arbitrary paths.
+  api.post('/apps/:app/reveal', (req, res) => {
+    try {
+      const appDef = controller.requireApp(req.params.app);
+      const proc = typeof req.body?.process === 'string' && req.body.process ? req.body.process : undefined;
+      let dir = appDef.cwd;
+      if (proc) {
+        const p = appDef.processes.find((x) => x.name === proc);
+        if (!p) throw new Error(`Unknown process '${proc}'`);
+        if (p.cwd) dir = path.resolve(appDef.cwd, p.cwd);
+      }
+      if (!fs.existsSync(dir)) throw new Error(`Directory does not exist: ${dir}`);
+      const [bin, args] =
+        process.platform === 'darwin'
+          ? ['open', [dir]]
+          : process.platform === 'win32'
+            ? ['explorer', [dir]]
+            : ['xdg-open', [dir]];
+      execFile(bin, args, () => { /* fire and forget */ });
+      res.json({ ok: true, dir });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }

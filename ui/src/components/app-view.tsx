@@ -17,6 +17,7 @@ import {
   getMetricsHistory,
   isStarting,
   releaseLease,
+  revealInFinder,
   type AppInfo,
   type AuditEntry,
   type ProcInfo,
@@ -25,7 +26,7 @@ import {
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
 import { Elapsed, Uptime } from '@/components/uptime'
-import { Activity, ArrowLeft, Cpu, FileText, Hammer, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
+import { Activity, ArrowLeft, Cpu, FileText, FolderOpen, Hammer, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return <span className="text-[10px] text-muted-foreground">—</span>
@@ -224,7 +225,14 @@ export function AppView({
               )}
               {app.description && <span className="truncate text-xs text-muted-foreground">{app.description}</span>}
             </div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">{app.cwd}</div>
+            <button
+              onClick={() => void revealInFinder(app.name).catch(() => {})}
+              title="Show in Finder"
+              className="group/cwd flex max-w-full items-center gap-1 truncate font-mono text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <FolderOpen className="size-3 shrink-0 opacity-0 transition-opacity group-hover/cwd:opacity-100" />
+              <span className="truncate group-hover/cwd:underline">{app.cwd}</span>
+            </button>
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5">
@@ -443,7 +451,15 @@ export function AppView({
                   {p.devCommand && (
                     <div className="truncate text-sky-600 dark:text-sky-400" title={p.devCommand}>dev: {p.devCommand}</div>
                   )}
-                  {p.cwd && <div className="truncate">cwd: {p.cwd}</div>}
+                  {p.cwd && (
+                    <button
+                      onClick={() => void revealInFinder(app.name, p.name).catch(() => {})}
+                      title="Show in Finder"
+                      className="flex max-w-full items-center gap-1 truncate hover:text-foreground hover:underline"
+                    >
+                      <FolderOpen className="size-3 shrink-0" /> cwd: {p.cwd}
+                    </button>
+                  )}
                 </TableCell>
                 <TableCell className="font-mono text-[11px]">{p.ports.length > 0 ? p.ports.join(', ') : '—'}</TableCell>
                 <TableCell className="max-w-40 truncate font-mono text-[11px]" title={p.healthUrl ?? undefined}>

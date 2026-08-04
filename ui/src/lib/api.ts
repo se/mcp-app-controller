@@ -253,6 +253,13 @@ export const cleanApp = (app: string) =>
     body: JSON.stringify({ reason: 'manual clean from UI' }),
   })
 
+/** Open the app's (or process's) working directory in Finder/Explorer. */
+export const revealInFinder = (app: string, proc?: string) =>
+  api<{ ok: true; dir: string }>(`/apps/${encodeURIComponent(app)}/reveal`, {
+    method: 'POST',
+    body: JSON.stringify({ process: proc }),
+  })
+
 export const releaseLease = (app: string) =>
   api(`/apps/${encodeURIComponent(app)}/release-lease`, { method: 'POST', body: '{}' })
 
