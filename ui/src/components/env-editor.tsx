@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -10,192 +10,314 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { saveAppEnv, type AppInfo } from '@/lib/api'
-import { Check, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Check, Plus, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
-type KV = { key: string; value: string }
-const toKv = (r: Record<string, string>): KV[] => Object.entries(r).map(([key, value]) => ({ key, value }))
-const fromKv = (rows: KV[]): Record<string, string> =>
-  Object.fromEntries(rows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value]))
+/** One flat row of the environment table. Scope: 'app' | 'set:<name>' | 'proc:<name>'. */
+interface EnvRow {
+  id: number
+  scope: string
+  key: string
+  value: string
+}
 
-function KvTable({ rows, onChange }: { rows: KV[]; onChange: (rows: KV[]) => void }) {
-  const set = (i: number, patch: Partial<KV>) =>
-    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+const scopeLabel = (scope: string) =>
+  scope === 'app' ? 'app-wide' : scope.startsWith('set:') ? scope.slice(4) : scope.slice(5)
+
+function ScopeBadge({ scope, active }: { scope: string; active: string }) {
+  const kind = scope === 'app' ? 'app' : scope.startsWith('set:') ? 'set' : 'proc'
+  const name = scopeLabel(scope)
+  const isActiveSet = kind === 'set' && name === active
   return (
-    <div className="flex flex-col gap-1.5">
-      {rows.length === 0 && <div className="text-[11px] text-muted-foreground">No variables.</div>}
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          <Input value={r.key} onChange={(e) => set(i, { key: e.target.value })}
-            placeholder="KEY" className="h-7 w-56 font-mono text-xs" />
-          <Input value={r.value} onChange={(e) => set(i, { value: e.target.value })}
-            placeholder="value" className="h-7 flex-1 font-mono text-xs" />
-          <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground hover:text-red-500"
-            onClick={() => onChange(rows.filter((_, j) => j !== i))}>
-            <Trash2 className="size-3" />
-          </Button>
-        </div>
-      ))}
-      <Button variant="outline" size="sm" className="mt-1 h-7 w-fit text-xs"
-        onClick={() => onChange([...rows, { key: '', value: '' }])}>
-        <Plus className="size-3" /> add variable
-      </Button>
-    </div>
+    <Badge
+      variant="outline"
+      title={
+        kind === 'app'
+          ? 'Applied to every process of this app'
+          : kind === 'set'
+            ? isActiveSet
+              ? `Environment set '${name}' — ACTIVE (applied on top of app-wide vars)`
+              : `Environment set '${name}' — inactive (not applied until selected)`
+            : `Only for process '${name}' (highest priority)`
+      }
+      className={cn(
+        'h-5 px-1.5 font-mono text-[10px]',
+        kind === 'app' && 'text-muted-foreground',
+        kind === 'set' &&
+          (isActiveSet
+            ? 'border-violet-500/60 text-violet-600 dark:text-violet-400'
+            : 'border-violet-500/25 text-violet-600/50 dark:text-violet-400/50'),
+        kind === 'proc' && 'border-sky-500/40 text-sky-600 dark:text-sky-400'
+      )}
+    >
+      {kind === 'app' ? 'app-wide' : name}
+      {isActiveSet ? ' ●' : ''}
+    </Badge>
   )
 }
 
 /**
- * Environment layers editor for an app:
- * app-wide vars < active environment set (dev/test/staging/prod...) < per-process vars.
+ * Environment editor as one flat, filterable table.
+ * Layering at spawn: shell env → app-wide → ACTIVE set → process (left overridden by right).
  */
 export function EnvCard({ app, onChanged }: { app: AppInfo; onChanged: () => void }) {
-  const [appEnv, setAppEnv] = useState<KV[]>(toKv(app.env))
-  const [envs, setEnvs] = useState<Record<string, KV[]>>(
-    Object.fromEntries(Object.entries(app.environments).map(([k, v]) => [k, toKv(v)]))
-  )
-  const [active, setActive] = useState<string>(app.activeEnvironment ?? '')
-  const [selectedEnv, setSelectedEnv] = useState<string>(app.activeEnvironment ?? Object.keys(app.environments)[0] ?? '')
-  const [newEnvName, setNewEnvName] = useState('')
-  const [selectedProc, setSelectedProc] = useState<string>(app.processes[0]?.name ?? '')
-  const [procEnvs, setProcEnvs] = useState<Record<string, KV[]>>(
-    Object.fromEntries(app.processes.map((p) => [p.name, toKv(p.env)]))
-  )
-  const [dirty, setDirty] = useState(false)
-  const [savedMsg, setSavedMsg] = useState('')
+  let nextId = useMemo(() => ({ n: 0 }), [app.name]) // eslint-disable-line react-hooks/exhaustive-deps
+  const buildRows = (): { rows: EnvRow[]; sets: string[] } => {
+    const rows: EnvRow[] = []
+    const push = (scope: string, rec: Record<string, string>) => {
+      for (const [key, value] of Object.entries(rec)) rows.push({ id: nextId.n++, scope, key, value })
+    }
+    push('app', app.env)
+    for (const [set, rec] of Object.entries(app.environments)) push(`set:${set}`, rec)
+    for (const p of app.processes) push(`proc:${p.name}`, p.env)
+    return { rows, sets: Object.keys(app.environments) }
+  }
 
-  // Re-sync when a different app is opened
+  const [rows, setRows] = useState<EnvRow[]>([])
+  const [sets, setSets] = useState<string[]>([])
+  const [active, setActive] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [query, setQuery] = useState('')
+  const [scopeFilter, setScopeFilter] = useState('all')
+  const [newSet, setNewSet] = useState('')
+  const [draft, setDraft] = useState({ scope: 'app', key: '', value: '' })
+
   useEffect(() => {
-    setAppEnv(toKv(app.env))
-    setEnvs(Object.fromEntries(Object.entries(app.environments).map(([k, v]) => [k, toKv(v)])))
+    const b = buildRows()
+    setRows(b.rows)
+    setSets(b.sets)
     setActive(app.activeEnvironment ?? '')
-    setSelectedEnv(app.activeEnvironment ?? Object.keys(app.environments)[0] ?? '')
-    setSelectedProc(app.processes[0]?.name ?? '')
-    setProcEnvs(Object.fromEntries(app.processes.map((p) => [p.name, toKv(p.env)])))
     setDirty(false)
+    setScopeFilter('all')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app.name])
 
-  const markDirty = () => setDirty(true)
+  const scopes = useMemo(
+    () => ['app', ...sets.map((s) => `set:${s}`), ...app.processes.map((p) => `proc:${p.name}`)],
+    [sets, app.processes]
+  )
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return rows
+      .filter((r) => (scopeFilter === 'all' ? true : r.scope === scopeFilter))
+      .filter((r) => !q || r.key.toLowerCase().includes(q) || r.value.toLowerCase().includes(q))
+      .sort((a, b) => scopes.indexOf(a.scope) - scopes.indexOf(b.scope) || a.key.localeCompare(b.key))
+  }, [rows, query, scopeFilter, scopes])
+
+  /** Runtime priority of a scope (higher wins). Inactive sets never apply. */
+  const priority = (scope: string) =>
+    scope === 'app' ? 1 : scope === `set:${active}` ? 2 : scope.startsWith('proc:') ? 3 : 0
+
+  /** Which higher-priority row shadows this one at runtime, if any. */
+  const shadowedBy = (row: EnvRow): string | null => {
+    const p = priority(row.scope)
+    if (p === 0) return null // inactive set: not applied at all
+    const winner = rows
+      .filter((r) => r.key === row.key && r.id !== row.id && priority(r.scope) > p)
+      .sort((a, b) => priority(b.scope) - priority(a.scope))[0]
+    return winner ? scopeLabel(winner.scope) : null
+  }
+
+  const update = (id: number, patch: Partial<EnvRow>) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+    setDirty(true)
+  }
 
   const save = async () => {
     try {
-      await saveAppEnv(app.name, {
-        env: fromKv(appEnv),
-        environments: Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, fromKv(v)])),
-        activeEnvironment: active,
-        processEnv: Object.fromEntries(Object.entries(procEnvs).map(([k, v]) => [k, fromKv(v)])),
-      })
+      const env: Record<string, string> = {}
+      const environments: Record<string, Record<string, string>> = Object.fromEntries(sets.map((s) => [s, {}]))
+      const processEnv: Record<string, Record<string, string>> = Object.fromEntries(app.processes.map((p) => [p.name, {}]))
+      for (const r of rows) {
+        const key = r.key.trim()
+        if (!key) continue
+        if (r.scope === 'app') env[key] = r.value
+        else if (r.scope.startsWith('set:')) (environments[r.scope.slice(4)] ??= {})[key] = r.value
+        else (processEnv[r.scope.slice(5)] ??= {})[key] = r.value
+      }
+      await saveAppEnv(app.name, { env, environments, activeEnvironment: active, processEnv })
       setDirty(false)
-      setSavedMsg('Saved — restart processes to apply the new variables.')
-      setTimeout(() => setSavedMsg(''), 5000)
+      toast.success('Environment saved — restart processes to apply.')
       onChanged()
     } catch (err) {
-      alert((err as Error).message)
+      toast.error((err as Error).message)
     }
   }
 
+  const addDraft = () => {
+    const key = draft.key.trim()
+    if (!key) return
+    setRows((prev) => [...prev, { id: nextId.n++, scope: draft.scope, key, value: draft.value }])
+    setDraft((d) => ({ ...d, key: '', value: '' }))
+    setDirty(true)
+  }
+
   return (
-    <Card className="gap-0 py-0">
-      <CardHeader className="flex flex-row items-center justify-between border-b px-4 py-2.5">
-        <div>
-          <span className="text-sm font-medium">Environment</span>
-          <span className="ml-2 text-[11px] text-muted-foreground">
-            layering: shell env → app-wide → active set → per-process
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {savedMsg && <span className="text-[11px] text-emerald-600 dark:text-emerald-400">{savedMsg}</span>}
+    <Card className="gap-0 overflow-hidden py-0">
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
+        <span className="text-sm font-medium">Environment</span>
+        <span className="text-[11px] text-muted-foreground">
+          app-wide → active set → process (right overrides left)
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          {dirty && <span className="text-[11px] text-amber-600 dark:text-amber-400">unsaved changes</span>}
           <Button size="sm" className="h-7 text-xs" disabled={!dirty} onClick={save}>
             <Check className="size-3.5" /> Save
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="grid grid-cols-1 gap-5 px-4 py-4 lg:grid-cols-3">
-        <div className="flex flex-col gap-2">
-          <Label className="text-xs font-medium">App-wide variables</Label>
-          <KvTable rows={appEnv} onChange={(r) => { setAppEnv(r); markDirty() }} />
-        </div>
+      </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs font-medium">Environment sets</Label>
-            <div className="flex items-center gap-1.5">
-              <Label className="text-[11px] text-muted-foreground">active:</Label>
-              <Select value={active || '__none__'} onValueChange={(v) => { setActive(v === '__none__' ? '' : v); markDirty() }}>
-                <SelectTrigger size="sm" className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+      <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 dark:bg-muted/10">
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter by key or value…"
+          className="h-7 w-56 text-xs"
+        />
+        <Select value={scopeFilter} onValueChange={setScopeFilter}>
+          <SelectTrigger size="sm" className="h-7 w-40 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All scopes</SelectItem>
+            <SelectItem value="app">app-wide</SelectItem>
+            {sets.map((s) => <SelectItem key={s} value={`set:${s}`}>set: {s}</SelectItem>)}
+            {app.processes.map((p) => <SelectItem key={p.name} value={`proc:${p.name}`}>process: {p.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground">active set:</span>
+          <Select value={active || '__none__'} onValueChange={(v) => { setActive(v === '__none__' ? '' : v); setDirty(true) }}>
+            <SelectTrigger size="sm" className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">(none)</SelectItem>
+              {sets.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-1">
+          <Input
+            value={newSet}
+            onChange={(e) => setNewSet(e.target.value)}
+            placeholder="new set (dev, prod…)"
+            className="h-7 w-32 text-xs"
+          />
+          <Button variant="outline" size="icon-xs" title="Add environment set"
+            disabled={!newSet.trim() || sets.includes(newSet.trim())}
+            onClick={() => { setSets((prev) => [...prev, newSet.trim()]); setNewSet(''); setDirty(true) }}>
+            <Plus className="size-3" />
+          </Button>
+          {scopeFilter.startsWith('set:') && (
+            <Button variant="ghost" size="icon-xs" title={`Delete set '${scopeFilter.slice(4)}' and its variables`}
+              className="text-muted-foreground hover:text-red-500"
+              onClick={() => {
+                const s = scopeFilter.slice(4)
+                if (!confirm(`Delete environment set '${s}' and its variables?`)) return
+                setSets((prev) => prev.filter((x) => x !== s))
+                setRows((prev) => prev.filter((r) => r.scope !== `set:${s}`))
+                if (active === s) setActive('')
+                setScopeFilter('all')
+                setDirty(true)
+              }}>
+              <Trash2 className="size-3" />
+            </Button>
+          )}
+        </div>
+        <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+          {filtered.length} / {rows.length} vars
+        </span>
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-32">Scope</TableHead>
+            <TableHead className="w-72">Variable</TableHead>
+            <TableHead>Value</TableHead>
+            <TableHead className="w-28">Effective</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {filtered.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                {rows.length === 0 ? 'No variables defined yet — add one below.' : 'No variables match the filter.'}
+              </TableCell>
+            </TableRow>
+          )}
+          {filtered.map((r) => {
+            const shadow = shadowedBy(r)
+            const inactive = priority(r.scope) === 0
+            return (
+              <TableRow key={r.id} className={cn((shadow || inactive) && 'opacity-70')}>
+                <TableCell><ScopeBadge scope={r.scope} active={active} /></TableCell>
+                <TableCell>
+                  <Input value={r.key} onChange={(e) => update(r.id, { key: e.target.value })}
+                    className="h-7 border-transparent bg-transparent font-mono text-xs shadow-none hover:border-input focus-visible:border-input" />
+                </TableCell>
+                <TableCell>
+                  <Input value={r.value} onChange={(e) => update(r.id, { value: e.target.value })}
+                    className="h-7 border-transparent bg-transparent font-mono text-xs shadow-none hover:border-input focus-visible:border-input" />
+                </TableCell>
+                <TableCell className="text-[11px]">
+                  {inactive ? (
+                    <span className="text-muted-foreground" title="This set is not active — the variable is not applied">inactive set</span>
+                  ) : shadow ? (
+                    <span className="text-amber-600 dark:text-amber-400" title={`A higher-priority scope defines the same key — at runtime the value from '${shadow}' wins`}>
+                      overridden by {shadow}
+                    </span>
+                  ) : (
+                    <span className="text-emerald-600 dark:text-emerald-400">applies</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Button variant="ghost" size="icon-xs" title="Remove variable"
+                    className="text-muted-foreground hover:text-red-500"
+                    onClick={() => { setRows((prev) => prev.filter((x) => x.id !== r.id)); setDirty(true) }}>
+                    <Trash2 className="size-3" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+          <TableRow className="hover:bg-transparent">
+            <TableCell>
+              <Select value={draft.scope} onValueChange={(v) => setDraft((d) => ({ ...d, scope: v }))}>
+                <SelectTrigger size="sm" className="h-7 w-full text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">(none)</SelectItem>
-                  {Object.keys(envs).map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                  <SelectItem value="app">app-wide</SelectItem>
+                  {sets.map((s) => <SelectItem key={s} value={`set:${s}`}>set: {s}</SelectItem>)}
+                  {app.processes.map((p) => <SelectItem key={p.name} value={`proc:${p.name}`}>process: {p.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-1">
-            {Object.keys(envs).map((n) => (
-              <button key={n}
-                className={cn(
-                  'rounded-md border px-2 py-0.5 text-[11px] transition-colors',
-                  selectedEnv === n ? 'border-primary bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent',
-                  active === n && selectedEnv !== n && 'border-emerald-500/60 text-emerald-600 dark:text-emerald-400'
-                )}
-                onClick={() => setSelectedEnv(n)}>
-                {n}{active === n ? ' ●' : ''}
-              </button>
-            ))}
-            <Input value={newEnvName} onChange={(e) => setNewEnvName(e.target.value)}
-              placeholder="dev / prod…" className="h-6 w-24 text-[11px]" />
-            <Button variant="outline" size="icon-xs" title="Add environment set"
-              disabled={!newEnvName.trim() || newEnvName.trim() in envs}
-              onClick={() => {
-                const n = newEnvName.trim()
-                setEnvs((prev) => ({ ...prev, [n]: [] }))
-                setSelectedEnv(n)
-                setNewEnvName('')
-                markDirty()
-              }}>
-              <Plus className="size-3" />
-            </Button>
-          </div>
-          {selectedEnv && envs[selectedEnv] !== undefined ? (
-            <>
-              <KvTable rows={envs[selectedEnv]} onChange={(r) => { setEnvs((prev) => ({ ...prev, [selectedEnv]: r })); markDirty() }} />
-              <Button variant="ghost" size="sm" className="h-6 w-fit px-2 text-[11px] text-muted-foreground hover:text-red-500"
-                onClick={() => {
-                  if (!confirm(`Delete environment set '${selectedEnv}'?`)) return
-                  setEnvs((prev) => {
-                    const next = { ...prev }
-                    delete next[selectedEnv]
-                    return next
-                  })
-                  if (active === selectedEnv) setActive('')
-                  setSelectedEnv('')
-                  markDirty()
-                }}>
-                <Trash2 className="size-3" /> delete set
+            </TableCell>
+            <TableCell>
+              <Input value={draft.key} onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
+                placeholder="NEW_VARIABLE" className="h-7 font-mono text-xs" />
+            </TableCell>
+            <TableCell>
+              <Input value={draft.value} onChange={(e) => setDraft((d) => ({ ...d, value: e.target.value }))}
+                onKeyDown={(e) => e.key === 'Enter' && addDraft()}
+                placeholder="value" className="h-7 font-mono text-xs" />
+            </TableCell>
+            <TableCell colSpan={2}>
+              <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!draft.key.trim()} onClick={addDraft}>
+                <Plus className="size-3" /> Add
               </Button>
-            </>
-          ) : (
-            <div className="text-[11px] text-muted-foreground">Add a set (dev, test, staging, prod…) and switch between them.</div>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs font-medium">Per-process overrides</Label>
-            <Select value={selectedProc} onValueChange={setSelectedProc}>
-              <SelectTrigger size="sm" className="h-7 w-32 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {app.processes.map((p) => <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          {selectedProc && (
-            <KvTable rows={procEnvs[selectedProc] ?? []}
-              onChange={(r) => { setProcEnvs((prev) => ({ ...prev, [selectedProc]: r })); markDirty() }} />
-          )}
-        </div>
-      </CardContent>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </Card>
   )
 }
