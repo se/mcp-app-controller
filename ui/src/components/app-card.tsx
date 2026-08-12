@@ -78,6 +78,13 @@ function PrepareTail({ app, fallback }: { app: string; fallback: string | null }
   )
 }
 
+/**
+ * One in-flight UI action. `proc: '*'` marks a whole-app action; `blocking` ones
+ * (whole-app actions, and anything that runs the app-wide `prepare` build) disable
+ * every other button until they finish — plain per-process actions do not.
+ */
+type Op = { proc: string; kind: 'start' | 'stop' | 'restart' | 'clean' | 'delete' | 'release'; blocking: boolean }
+
 // dot | process | pid | uptime | ready | cpu | memory | command (flex) | actions
 const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
 
@@ -123,19 +130,28 @@ function AppCardInner({
   onEdit: () => void
   onChanged: () => void
 }) {
-  const [busy, setBusy] = useState<string | null>(null)
+  const [ops, setOps] = useState<Op[]>([])
 
-  const run = async (key: string, fn: () => Promise<unknown>) => {
-    setBusy(key)
+  const run = async (op: Op, fn: () => Promise<unknown>) => {
+    setOps((prev) => [...prev, op])
     try {
       await fn()
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
-      setBusy(null)
+      setOps((prev) => prev.filter((o) => o !== op))
       onChanged()
     }
   }
+
+  // Plain per-process actions run side by side — the daemon queues each process
+  // separately, so restarting `api` never has to wait for `account` to come back.
+  // Only `blocking` ops (whole-app actions and prepare builds, which are app-wide)
+  // disable the other buttons.
+  const blocked = ops.some((o) => o.blocking) || app.preparing
+  const procBusy = (proc: string) => blocked || ops.some((o) => o.proc === proc)
+  const appBusy = ops.length > 0
+  const isRestarting = (proc: string) => ops.some((o) => o.proc === proc && o.kind === 'restart')
 
   const leaseMinsLeft = app.lease ? Math.max(0, Math.round((app.lease.expires_at - Date.now()) / 60000)) : 0
   const runningCount = app.processes.filter((p) => p.status === 'running').length
@@ -193,24 +209,24 @@ function AppCardInner({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {!allRunning && (
-            <Button variant="outline" size="sm" disabled={busy !== null || inFlight}
+            <Button variant="outline" size="sm" disabled={appBusy || inFlight}
               title={inFlight ? 'Start already in progress (preparing/starting)' : undefined}
               className="gap-1.5 font-medium text-emerald-700 hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
-              onClick={() => run('start-all', () => appActionWithTakeover(app.name, 'start', { mode: 'start', reason: 'manual start-all from UI' }))}>
+              onClick={() => run({ proc: '*', kind: 'start', blocking: true }, () => appActionWithTakeover(app.name, 'start', { mode: 'start', reason: 'manual start-all from UI' }))}>
               <Play className="size-3.5" /> start all
             </Button>
           )}
           {runningCount > 0 && (
             <RestartSplitButton
               prepare={app.prepare}
-              disabled={busy !== null || inFlight}
+              disabled={appBusy || inFlight}
               title={inFlight
                 ? 'Start already in progress (preparing/starting)'
                 : `Restart all running processes (${runningCount}) — keeps each process's current mode.`}
               className="text-sky-700 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300"
-              label={busy === 'restart-all' ? 'restarting…' : 'restart all'}
+              label={isRestarting('*') ? 'restarting…' : 'restart all'}
               onRestart={(withPrepare) =>
-                run('restart-all', async () => {
+                run({ proc: '*', kind: 'restart', blocking: true }, async () => {
                   if (withPrepare) toast.info(`Restarting '${app.name}' with prepare — building first…`)
                   await appActionWithTakeover(app.name, 'restart', {
                     reason: `manual restart-all${withPrepare ? ' with prepare' : ''} from UI`,
@@ -220,10 +236,10 @@ function AppCardInner({
               }
             />
           )}
-          <Button variant="outline" size="sm" disabled={busy !== null || runningCount === 0}
+          <Button variant="outline" size="sm" disabled={appBusy || runningCount === 0}
             title={runningCount === 0 ? 'Nothing is running' : undefined}
             className="gap-1.5 font-medium text-red-700 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
-            onClick={() => run('stop-all', () => appActionWithTakeover(app.name, 'stop', { reason: 'manual stop-all from UI' }))}>
+            onClick={() => run({ proc: '*', kind: 'stop', blocking: true }, () => appActionWithTakeover(app.name, 'stop', { reason: 'manual stop-all from UI' }))}>
             <Square className="size-3.5" /> stop all
           </Button>
           {app.clean && (
@@ -232,12 +248,12 @@ function AppCardInner({
               : runningCount > 0
               ? `Rebuild from scratch: stop all → clean (${app.clean}) → start all (prepare runs a full fresh build)`
               : `Clear build cache: ${app.clean}\nNext build restores fresh packages (slower once).`}>
-              <Button variant="outline" size="sm" disabled={busy !== null || inFlight}
+              <Button variant="outline" size="sm" disabled={appBusy || inFlight}
                 className="gap-1.5 font-medium text-amber-700 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-600 dark:text-amber-500 dark:hover:text-amber-400"
                 onClick={() => {
                   if (runningCount > 0) {
                     toast.info(`Rebuilding '${app.name}': stop all → clean → start all`)
-                    void run('clean', async () => {
+                    void run({ proc: '*', kind: 'clean', blocking: true }, async () => {
                       const stopRes = await appAction(app.name, 'stop', { reason: 'stop before clean (rebuild from UI)' })
                       if (!Array.isArray(stopRes)) {
                         toast.error('Blocked: another session holds a lease on this app — rebuild aborted.')
@@ -255,13 +271,13 @@ function AppCardInner({
                     })
                   } else {
                     toast.info(`Cleaning '${app.name}' — ${app.clean}`)
-                    void run('clean', async () => {
+                    void run({ proc: '*', kind: 'clean', blocking: true }, async () => {
                       const r = await cleanApp(app.name)
                       toast.success(r.message)
                     })
                   }
                 }}>
-                <Eraser className="size-3.5" /> {busy === 'clean' ? (runningCount > 0 ? 'rebuilding…' : 'cleaning…') : 'clean'}
+                <Eraser className="size-3.5" /> {ops.some((o) => o.kind === 'clean') ? (runningCount > 0 ? 'rebuilding…' : 'cleaning…') : 'clean'}
               </Button>
             </span>
           )}
@@ -285,7 +301,7 @@ function AppCardInner({
               className="text-muted-foreground/70 hover:text-red-500"
               onClick={() => {
                 if (confirm(`Delete the app config of '${app.name}'?\n\nThis removes the whole app definition (all its processes) from the controller — running processes are stopped first. It does not touch any files of the app itself.`))
-                  run('delete', () => deleteApp(app.name))
+                  run({ proc: '*', kind: 'delete', blocking: true }, () => deleteApp(app.name))
               }}>
               <Trash2 className="size-3.5" />
             </Button>
@@ -341,7 +357,7 @@ function AppCardInner({
             </span>
           </span>
           <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-amber-700 hover:text-amber-600 dark:text-amber-500 dark:hover:text-amber-400"
-            onClick={() => run('release', () => releaseLease(app.name))}>
+            onClick={() => run({ proc: '*', kind: 'release', blocking: false }, () => releaseLease(app.name))}>
             release
           </Button>
         </div>
@@ -419,11 +435,15 @@ function AppCardInner({
                     <RestartSplitButton
                       compact
                       prepare={app.prepare}
-                      disabled={busy !== null}
-                      title={`Restart ${p.name} — keeps its current mode.`}
-                      label="restart"
+                      disabled={procBusy(p.name)}
+                      title={blocked
+                        ? 'An app-wide build/action is in progress'
+                        : `Restart ${p.name} — keeps its current mode.`}
+                      label={isRestarting(p.name) ? 'restarting…' : 'restart'}
                       onRestart={(withPrepare) =>
-                        run(p.name, async () => {
+                        // With prepare this builds the whole app, so it blocks the other
+                        // rows; a plain restart only occupies this process's own row.
+                        run({ proc: p.name, kind: 'restart', blocking: withPrepare }, async () => {
                           if (withPrepare) toast.info(`Restarting '${p.name}' with prepare — building first…`)
                           await appActionWithTakeover(app.name, 'restart', {
                             process: p.name,
@@ -433,20 +453,20 @@ function AppCardInner({
                         })
                       }
                     />
-                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
+                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={procBusy(p.name)}
+                      onClick={() => run({ proc: p.name, kind: 'stop', blocking: false }, () => appActionWithTakeover(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
                       <Square className="size-3" /> stop
                     </Button>
                   </>
                 ) : (
                   <>
-                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
+                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={procBusy(p.name)}
+                      onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
                       <Play className="size-3" /> start
                     </Button>
                     {p.devCommand && (
-                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={busy !== null}
-                        onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={procBusy(p.name)}
+                        onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
                         <Wrench className="size-3" /> dev
                       </Button>
                     )}

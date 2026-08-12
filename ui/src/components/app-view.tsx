@@ -152,7 +152,10 @@ export function AppView({
   onLogs: (proc: string) => void
   onChanged: () => void
 }) {
-  const [busy, setBusy] = useState(false)
+  // In-flight actions, keyed by process ('*' = whole app). Plain per-process actions
+  // run side by side (the daemon queues each process separately); only `blocking` ones
+  // — whole-app actions and prepare builds, which are app-wide — disable everything.
+  const [ops, setOps] = useState<{ proc: string; blocking: boolean }[]>([])
   const [history, setHistory] = useState<Record<string, ProcMetrics[]>>({})
 
   // Initial CPU history per process; new points are appended from live metrics updates
@@ -191,7 +194,9 @@ export function AppView({
     mode?: 'start' | 'dev',
     prepare?: boolean
   ) => {
-    setBusy(true)
+    // A whole-app action, or one that runs the app-wide prepare build, blocks the rest.
+    const op = { proc: proc ?? '*', blocking: !proc || !!prepare }
+    setOps((prev) => [...prev, op])
     try {
       await appActionWithTakeover(app.name, action, {
         process: proc,
@@ -202,10 +207,14 @@ export function AppView({
     } catch (err) {
       alert((err as Error).message)
     } finally {
-      setBusy(false)
+      setOps((prev) => prev.filter((o) => o !== op))
       onChanged()
     }
   }
+
+  const blocked = ops.some((o) => o.blocking) || app.preparing
+  const appBusy = ops.length > 0
+  const procBusy = (proc: string) => blocked || ops.some((o) => o.proc === proc)
 
   const running = app.processes.filter((p) => p.status === 'running')
   const crashed = app.processes.filter((p) => p.status === 'crashed').length
@@ -244,20 +253,20 @@ export function AppView({
         </div>
         <div className="flex shrink-0 gap-1.5">
           {running.length < app.processes.length && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => act('start')}>
+            <Button variant="outline" size="sm" disabled={appBusy} onClick={() => act('start')}>
               <Play className="size-3.5" /> start all
             </Button>
           )}
           {running.length > 0 && (
             <RestartSplitButton
               prepare={app.prepare}
-              disabled={busy}
+              disabled={appBusy}
               title={`Restart all running processes (${running.length})`}
               label="restart all"
               onRestart={(withPrepare) => void act('restart', undefined, undefined, withPrepare)}
             />
           )}
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => act('stop')}>
+          <Button variant="outline" size="sm" disabled={appBusy} onClick={() => act('stop')}>
             <Square className="size-3.5" /> stop all
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={onEdit} title="Edit app">
@@ -414,25 +423,27 @@ export function AppView({
                         <RestartSplitButton
                           compact
                           prepare={app.prepare}
-                          disabled={busy}
-                          title={`Restart ${p.name} — keeps its current mode.`}
+                          disabled={procBusy(p.name)}
+                          title={blocked
+                            ? 'An app-wide build/action is in progress'
+                            : `Restart ${p.name} — keeps its current mode.`}
                           label="restart"
                           onRestart={(withPrepare) => void act('restart', p.name, undefined, withPrepare)}
                         />
                         <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400"
-                          disabled={busy} onClick={() => act('stop', p.name)}>
+                          disabled={procBusy(p.name)} onClick={() => act('stop', p.name)}>
                           <Square className="size-3" /> stop
                         </Button>
                       </>
                     ) : (
                       <>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy}
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={procBusy(p.name)}
                           onClick={() => act('start', p.name, 'start')}>
                           <Play className="size-3" /> start
                         </Button>
                         {p.devCommand && (
                           <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400"
-                            disabled={busy} onClick={() => act('start', p.name, 'dev')}>
+                            disabled={procBusy(p.name)} onClick={() => act('start', p.name, 'dev')}>
                             <Wrench className="size-3" /> dev
                           </Button>
                         )}
