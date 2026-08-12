@@ -139,19 +139,20 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
     {
       title: 'Restart app',
       description:
-        'Restart an app or a single process. Keeps the previous run mode unless mode is given. IMPORTANT: never restart apps by killing pids or re-running commands yourself — always use this tool so other Claude sessions stay coordinated. Same lease/conflict rules as start_app.',
+        "Restart an app or a single process. Keeps the previous run mode unless mode is given. By default this only bounces the process(es) — the app's `prepare` (build) command is NOT run; pass prepare: true when you changed code that needs rebuilding. IMPORTANT: never restart apps by killing pids or re-running commands yourself — always use this tool so other Claude sessions stay coordinated. Same lease/conflict rules as start_app.",
       inputSchema: {
         app: z.string(),
         process: z.string().optional(),
         mode: modeSchema.optional(),
         reason: z.string().describe('Why you are restarting it'),
+        prepare: z.boolean().default(false).describe("Run the app's `prepare` (build-once) command before starting again — use after code changes. Ignored when the app has no prepare command. A plain restart skips the build."),
         force: z.boolean().default(false),
         wait_ready: z.boolean().default(true).describe('If the process has a health check defined, wait (max 30s) until it reports healthy before returning.'),
         takeover: z.boolean().default(false).describe('If a declared port is held by a process NOT started by the controller, stop it and run this process under controller management instead.'),
       },
     },
-    async ({ app, process: proc, mode, reason, force, wait_ready, takeover }) => {
-      const res = await controller.restart(app, proc, mode, reason, actor, force, wait_ready, takeover);
+    async ({ app, process: proc, mode, reason, prepare, force, wait_ready, takeover }) => {
+      const res = await controller.restart(app, proc, mode, reason, actor, force, wait_ready, takeover, prepare);
       return fmtState(res, app);
     }
   );
@@ -506,9 +507,9 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         name: z.string(),
         description: z.string().default(''),
         cwd: z.string().describe('Absolute path to the app root directory'),
-        prepare: z.string().optional().describe('Optional build-once command run to completion before every start/restart of this app (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
+        prepare: z.string().optional().describe('Optional build-once command run to completion before every start of this app, and before restarts that explicitly ask for it (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
         prepareTimeoutMs: z.number().int().optional().describe('Timeout for the prepare command in ms (default 600000)'),
-        prepareOrder: z.enum(['after-stop', 'before-stop']).optional().describe("When a RESTART runs 'prepare': 'after-stop' (default) kills the old process(es) first, then builds — no file locks from the running app, and anything responding after the restart is the fresh build; 'before-stop' builds while the old process keeps serving — less downtime, and a failed build leaves the app running"),
+        prepareOrder: z.enum(['after-stop', 'before-stop']).optional().describe("When a RESTART runs 'prepare' (restart with prepare: true): 'after-stop' (default) kills the old process(es) first, then builds — no file locks from the running app, and anything responding after the restart is the fresh build; 'before-stop' builds while the old process keeps serving — less downtime, and a failed build leaves the app running"),
         clean: z.string().optional().describe('Optional one-shot "clear build cache" command run on demand via clear_build_cache — e.g. delete build outputs and clear the package cache so the next build restores fresh packages'),
         cleanTimeoutMs: z.number().int().optional().describe('Timeout for the clean command in ms (default 600000)'),
         staggerMs: z.number().int().optional().describe('Pause between process starts in a multi-process operation (default 0)'),

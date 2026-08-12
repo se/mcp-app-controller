@@ -23,10 +23,11 @@ import {
   type ProcInfo,
   type ProcMetrics,
 } from '@/lib/api'
+import { RestartSplitButton } from '@/components/restart-split-button'
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
 import { Elapsed, Uptime } from '@/components/uptime'
-import { Activity, ArrowLeft, Cpu, FileText, FolderOpen, Hammer, Lock, MemoryStick, Pencil, Play, RotateCw, Square, Wrench } from 'lucide-react'
+import { Activity, ArrowLeft, Cpu, FileText, FolderOpen, Hammer, Lock, MemoryStick, Pencil, Play, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return <span className="text-[10px] text-muted-foreground">—</span>
@@ -184,13 +185,19 @@ export function AppView({
     })
   }, [app])
 
-  const act = async (action: 'start' | 'stop' | 'restart', proc?: string, mode?: 'start' | 'dev') => {
+  const act = async (
+    action: 'start' | 'stop' | 'restart',
+    proc?: string,
+    mode?: 'start' | 'dev',
+    prepare?: boolean
+  ) => {
     setBusy(true)
     try {
       await appActionWithTakeover(app.name, action, {
         process: proc,
         mode,
-        reason: `manual ${action}${mode === 'dev' ? ' (dev)' : ''} from app view`,
+        prepare,
+        reason: `manual ${action}${mode === 'dev' ? ' (dev)' : ''}${prepare ? ' with prepare' : ''} from app view`,
       })
     } catch (err) {
       alert((err as Error).message)
@@ -242,11 +249,13 @@ export function AppView({
             </Button>
           )}
           {running.length > 0 && (
-            <Button variant="outline" size="sm" disabled={busy}
+            <RestartSplitButton
+              prepare={app.prepare}
+              disabled={busy}
               title={`Restart all running processes (${running.length})`}
-              onClick={() => act('restart')}>
-              <RotateCw className="size-3.5" /> restart all
-            </Button>
+              label="restart all"
+              onRestart={(withPrepare) => void act('restart', undefined, undefined, withPrepare)}
+            />
           )}
           <Button variant="outline" size="sm" disabled={busy} onClick={() => act('stop')}>
             <Square className="size-3.5" /> stop all
@@ -402,10 +411,14 @@ export function AppView({
                   <div className="flex justify-end gap-1">
                     {p.status === 'running' ? (
                       <>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy}
-                          onClick={() => act('restart', p.name)}>
-                          <RotateCw className="size-3" /> restart
-                        </Button>
+                        <RestartSplitButton
+                          compact
+                          prepare={app.prepare}
+                          disabled={busy}
+                          title={`Restart ${p.name} — keeps its current mode.`}
+                          label="restart"
+                          onRestart={(withPrepare) => void act('restart', p.name, undefined, withPrepare)}
+                        />
                         <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400"
                           disabled={busy} onClick={() => act('stop', p.name)}>
                           <Square className="size-3" /> stop

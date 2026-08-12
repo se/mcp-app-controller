@@ -25,13 +25,14 @@ apps:
   - name: my-backend
     description: Example multi-process app
     cwd: /path/to/my-backend
-    # Optional build-once step: run to completion BEFORE any operation that starts
-    # 2+ processes of this app (whole-app start/restart, profile start, boot restore).
-    # Serializes an expensive shared build instead of every process compiling the
-    # same projects concurrently. Single-process starts skip it.
+    # Optional build-once step: run to completion BEFORE every START of this app
+    # (whole-app, single process, profile start, boot restore). Serializes an expensive
+    # shared build instead of every process compiling the same projects concurrently.
+    # Restarts skip it unless asked explicitly ("restart with prepare" in the UI, or
+    # restart_app with prepare: true).
     prepare: dotnet build MyBackend.sln
     prepareTimeoutMs: 600000            # optional, default 10 min
-    # When a RESTART runs prepare: 'after-stop' (default) kills the old processes
+    # When a restart WITH prepare runs it: 'after-stop' (default) kills the old processes
     # first, then builds (no file locks from the running app, restart always serves
     # the fresh build); 'before-stop' builds while the old process keeps serving
     # (less downtime; a failed build leaves the app running).

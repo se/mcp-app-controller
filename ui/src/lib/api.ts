@@ -232,7 +232,7 @@ export interface ActionResult {
 export const appAction = (
   app: string,
   action: 'start' | 'stop' | 'restart',
-  body: { process?: string; mode?: 'start' | 'dev'; reason?: string; takeover?: boolean }
+  body: { process?: string; mode?: 'start' | 'dev'; reason?: string; takeover?: boolean; prepare?: boolean }
 ) =>
   api<ActionResult[] | { blocked: true }>(`/apps/${encodeURIComponent(app)}/${action}`, {
     method: 'POST',
@@ -246,7 +246,7 @@ export const appAction = (
 export async function appActionWithTakeover(
   app: string,
   action: 'start' | 'stop' | 'restart',
-  body: { process?: string; mode?: 'start' | 'dev'; reason?: string }
+  body: { process?: string; mode?: 'start' | 'dev'; reason?: string; prepare?: boolean }
 ): Promise<void> {
   const findErr = (res: ActionResult[] | { blocked: true }) =>
     Array.isArray(res) ? res.find((r) => r.error) : undefined

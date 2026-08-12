@@ -49,14 +49,20 @@ referencing the same core solution) waste CPU and can race MSBuild when started 
 Two optional app-level settings fix this:
 
 - `prepare: <command>` — run to completion (in the app cwd, same env layering as
-  processes) before **every** start/restart operation of the app: whole-app, single
-  process, profile start, and boot restore. Concurrent operations share a single run,
-  and a success within the last 30s is reused (bursts don't re-build back-to-back).
+  processes) before **every start** of the app: whole-app, single process, profile
+  start, and boot restore. Concurrent operations share a single run, and a success
+  within the last 30s is reused (bursts don't re-build back-to-back).
   Because the build is guaranteed fresh at spawn time, process commands can safely use
   `--no-build` launchers for instant starts. Output is logged as pseudo-process
   `<app>/prepare` (visible via `app_logs`); non-zero exit or timeout
   (`prepareTimeoutMs`, default 10 min) aborts the operation.
-- `prepareOrder: after-stop | before-stop` — when a **restart** runs `prepare`.
+- **Restarts skip `prepare` by default** — a restart just bounces the process(es) over
+  whatever is already built (the common, fast case: env/config change, wedged process).
+  To rebuild first, use the ▾ menu next to *restart all* → **Restart with Prepare**
+  (only shown when the app has a `prepare` command), the command palette entry, or
+  `restart_app` with `prepare: true`. An explicit restart-with-prepare always builds —
+  it ignores the 30s reuse window.
+- `prepareOrder: after-stop | before-stop` — when a **restart with prepare** runs `prepare`.
   `after-stop` (default) kills the old process(es) first, then builds: the running
   app can't lock build outputs (e.g. .NET DLLs) or compete with the build for
   CPU/RAM, and anything responding after the restart is guaranteed to be the fresh
@@ -165,7 +171,7 @@ Recommended addition to your global `~/.claude/CLAUDE.md` so sessions actually u
 |---|---|
 | `identify` | Set a stable session name so leases survive restarts/reconnects |
 | `list_apps` | All apps, process statuses, pids, modes, cpu/mem, active leases |
-| `start_app` / `stop_app` / `restart_app` | Manage an app or a single process (`mode: start\|dev`, requires `reason`) |
+| `start_app` / `stop_app` / `restart_app` | Manage an app or a single process (`mode: start\|dev`, requires `reason`; `restart_app` takes `prepare: true` to rebuild first) |
 | `app_logs` | Last N log lines (stdout+stderr, timestamped) |
 | `app_errors` | Only the recent error/warning lines, deduplicated with counts |
 | `wait_for_log` | Block until a log line matches a regex (readiness / next error), with timeout + lookback |

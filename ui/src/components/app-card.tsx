@@ -2,12 +2,13 @@ import { memo, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { RestartSplitButton } from '@/components/restart-split-button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, getLogs, isStarting, releaseLease, revealInFinder, type AppInfo, type ProcInfo } from '@/lib/api'
 import { Elapsed, Uptime } from '@/components/uptime'
 import { logBus } from '@/lib/log-bus'
-import { ChevronDown, ChevronRight, Eraser, FileText, FolderOpen, Lock, Pencil, Pin, Play, RotateCw, Square, Timer, Trash2, Wrench } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eraser, FileText, FolderOpen, Lock, Pencil, Pin, Play, Square, Timer, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -200,14 +201,24 @@ function AppCardInner({
             </Button>
           )}
           {runningCount > 0 && (
-            <Button variant="outline" size="sm" disabled={busy !== null || inFlight}
+            <RestartSplitButton
+              prepare={app.prepare}
+              disabled={busy !== null || inFlight}
               title={inFlight
                 ? 'Start already in progress (preparing/starting)'
-                : `Restart all running processes (${runningCount}) — keeps each process's current mode`}
-              className="gap-1.5 font-medium text-sky-700 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300"
-              onClick={() => run('restart-all', () => appActionWithTakeover(app.name, 'restart', { reason: 'manual restart-all from UI' }))}>
-              <RotateCw className="size-3.5" /> {busy === 'restart-all' ? 'restarting…' : 'restart all'}
-            </Button>
+                : `Restart all running processes (${runningCount}) — keeps each process's current mode.`}
+              className="text-sky-700 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300"
+              label={busy === 'restart-all' ? 'restarting…' : 'restart all'}
+              onRestart={(withPrepare) =>
+                run('restart-all', async () => {
+                  if (withPrepare) toast.info(`Restarting '${app.name}' with prepare — building first…`)
+                  await appActionWithTakeover(app.name, 'restart', {
+                    reason: `manual restart-all${withPrepare ? ' with prepare' : ''} from UI`,
+                    prepare: withPrepare,
+                  })
+                })
+              }
+            />
           )}
           <Button variant="outline" size="sm" disabled={busy !== null || runningCount === 0}
             title={runningCount === 0 ? 'Nothing is running' : undefined}
@@ -405,10 +416,23 @@ function AppCardInner({
               <div className="flex shrink-0 justify-end gap-1">
                 {p.status === 'running' ? (
                   <>
-                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy !== null}
-                      onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'restart', { process: p.name, reason: 'manual restart from UI' }))}>
-                      <RotateCw className="size-3" /> restart
-                    </Button>
+                    <RestartSplitButton
+                      compact
+                      prepare={app.prepare}
+                      disabled={busy !== null}
+                      title={`Restart ${p.name} — keeps its current mode.`}
+                      label="restart"
+                      onRestart={(withPrepare) =>
+                        run(p.name, async () => {
+                          if (withPrepare) toast.info(`Restarting '${p.name}' with prepare — building first…`)
+                          await appActionWithTakeover(app.name, 'restart', {
+                            process: p.name,
+                            reason: `manual restart${withPrepare ? ' with prepare' : ''} from UI`,
+                            prepare: withPrepare,
+                          })
+                        })
+                      }
+                    />
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={busy !== null}
                       onClick={() => run(p.name, () => appActionWithTakeover(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
                       <Square className="size-3" /> stop

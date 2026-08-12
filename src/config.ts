@@ -43,7 +43,9 @@ export const AppDefSchema = z
     // `--no-build` launch commands safe (the build is always fresh at spawn time).
     prepare: z.string().optional(),
     prepareTimeoutMs: z.number().int().min(1000).default(600000),
-    // When a RESTART runs `prepare`: 'after-stop' (default) kills the old process(es)
+    // Restarts do NOT run `prepare` unless the caller explicitly asks (UI "restart with
+    // prepare" / restart_app prepare: true) — a plain restart just bounces the processes.
+    // When a restart DOES run `prepare`: 'after-stop' (default) kills the old process(es)
     // FIRST, then builds — the running app never locks build outputs, never competes
     // with the build for CPU/RAM, and anything responding after the restart is
     // guaranteed to be the fresh build. 'before-stop' builds while the old process

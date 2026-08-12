@@ -110,15 +110,17 @@ export class Controller {
   }
 
   /**
-   * Prepare (when configured) before EVERY start/restart operation of the app —
-   * this is what makes `--no-build` launch commands safe: the build is always fresh.
+   * Prepare (when configured) before every START of the app — this is what makes
+   * `--no-build` launch commands safe: the build is always fresh.
    * A successful prepare within the last 30s is reused (bursts: profile start,
-   * restore, dependency auto-starts don't re-build back-to-back).
+   * restore, dependency auto-starts don't re-build back-to-back). `force` skips that
+   * reuse window: someone explicitly asked for a build (restart-with-prepare), so a
+   * rebuild is the whole point of the operation.
    */
-  private async prepareForStart(app: AppDef, actor: ActorCtx, reason: string): Promise<string | null> {
+  private async prepareForStart(app: AppDef, actor: ActorCtx, reason: string, force = false): Promise<string | null> {
     if (!app.prepare) return null;
     const last = this.preparedAt.get(app.name);
-    if (last && Date.now() - last < 30000 && !this.preparing.has(app.name)) return null;
+    if (!force && last && Date.now() - last < 30000 && !this.preparing.has(app.name)) return null;
     try {
       await this.ensurePrepared(app, actor);
       return null;
@@ -425,7 +427,8 @@ export class Controller {
     actor: ActorCtx,
     force = false,
     waitReady = false,
-    takeover = false
+    takeover = false,
+    withPrepare = false
   ): Promise<ConflictInfo | ProcResult[]> {
     const app = this.requireApp(appName);
     const conflict = this.checkConflict(appName, actor, force);
@@ -435,25 +438,31 @@ export class Controller {
     // Capture each process's current mode BEFORE anything stops it — getState only
     // reports a mode while the process is running.
     const prevModes = new Map(procs.map((p) => [p.name, this.pm.getState(appName, p.name).mode]));
-    // prepareOrder 'after-stop' (default): kill the old processes FIRST, then build.
-    // The running app can't lock build outputs or steal CPU from the build, and
-    // nothing stale keeps serving while the build runs — anything responding after
-    // the restart is the fresh build. ('before-stop' trades that for less downtime:
-    // build while the old process serves; a failed build leaves the app running.)
-    if (app.prepare && app.prepareOrder === 'after-stop') {
-      await Promise.all(
-        procs.map((p) =>
-          this.queue.enqueue(
-            `${appName}/${p.name}`,
-            `stop(restart) by ${actor.session}`,
-            () => this.pm.stop(appName, p.name)
+    // A plain restart just bounces the processes over whatever is already built — the
+    // common case (config/env change, wedged process) and the fast one. `prepare` runs
+    // only when the caller explicitly asks for it (UI's "restart with prepare").
+    let prepareMs = 0;
+    if (withPrepare && app.prepare) {
+      // prepareOrder 'after-stop' (default): kill the old processes FIRST, then build.
+      // The running app can't lock build outputs or steal CPU from the build, and
+      // nothing stale keeps serving while the build runs — anything responding after
+      // the restart is the fresh build. ('before-stop' trades that for less downtime:
+      // build while the old process serves; a failed build leaves the app running.)
+      if (app.prepareOrder === 'after-stop') {
+        await Promise.all(
+          procs.map((p) =>
+            this.queue.enqueue(
+              `${appName}/${p.name}`,
+              `stop(restart) by ${actor.session}`,
+              () => this.pm.stop(appName, p.name)
+            )
           )
-        )
-      );
+        );
+      }
+      const prepErr = await this.prepareForStart(app, actor, reason, true);
+      if (prepErr) return procs.map((p) => ({ proc: p.name, state: this.pm.getState(appName, p.name), error: prepErr }));
+      prepareMs = Date.now() - t0;
     }
-    const prepErr = await this.prepareForStart(app, actor, reason);
-    if (prepErr) return procs.map((p) => ({ proc: p.name, state: this.pm.getState(appName, p.name), error: prepErr }));
-    const prepareMs = Date.now() - t0;
     // Parallel like start(): each process stops+starts in its own task; dependsOn
     // waiters resume as soon as their dependency reports ready.
     const results = await Promise.all(

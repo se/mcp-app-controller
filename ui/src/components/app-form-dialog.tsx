@@ -201,7 +201,9 @@ export function AppFormDialog({
           </div>
           {prepare.trim() !== '' && (
             <div className="grid gap-1.5">
-              <Label className="text-xs">Restart order</Label>
+              <Label className="text-xs" title="Only applies to “restart with prepare” — a plain restart never builds">
+                Restart-with-prepare order
+              </Label>
               <Select value={prepareOrder} onValueChange={(v) => setPrepareOrder(v as 'after-stop' | 'before-stop')}>
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />

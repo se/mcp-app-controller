@@ -120,8 +120,8 @@ export function createHttpServer(controller: Controller) {
   });
 
   api.post('/apps/:app/restart', async (req, res) => {
-    const { process: proc, mode, reason = 'manual restart from UI', waitReady = false, takeover = false } = req.body ?? {};
-    const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover);
+    const { process: proc, mode, reason = 'manual restart from UI', waitReady = false, takeover = false, prepare = false } = req.body ?? {};
+    const r = await controller.restart(req.params.app, proc, mode, reason, UI_ACTOR, true, waitReady, takeover, prepare);
     res.json(r);
   });
 

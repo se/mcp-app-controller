@@ -12,7 +12,7 @@ import {
 import { appActionWithTakeover, type AppInfo } from '@/lib/api'
 import { useTheme } from '@/lib/theme'
 import type { View } from '@/components/sidebar'
-import { FileText, History, LayoutDashboard, Monitor, Moon, Play, RotateCw, Square, Sun, Wrench } from 'lucide-react'
+import { FileText, Hammer, History, LayoutDashboard, Monitor, Moon, Play, RotateCw, Square, Sun, Wrench } from 'lucide-react'
 
 export function CommandPalette({
   apps,
@@ -73,6 +73,12 @@ export function CommandPalette({
               onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { reason: 'restart from command palette' }))}>
               <RotateCw className="size-4" /> Restart {a.name} (all)
             </CommandItem>
+            {a.prepare && (
+              <CommandItem value={`restart ${a.name} all with prepare build`}
+                onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { prepare: true, reason: 'restart with prepare from command palette' }))}>
+                <Hammer className="size-4" /> Restart {a.name} with Prepare (all)
+              </CommandItem>
+            )}
             <CommandItem value={`start ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { mode: 'start', reason: 'start from command palette' }))}>
               <Play className="size-4" /> Start {a.name} (all)
@@ -90,6 +96,14 @@ export function CommandPalette({
                     onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { process: p.name, reason: 'restart from command palette' }))}>
                     <RotateCw className="size-4" /> Restart {key}
                   </CommandItem>,
+                  ...(a.prepare
+                    ? [
+                        <CommandItem key={`restart-prep-${key}`} value={`restart ${key} with prepare build`}
+                          onSelect={() => run(() => appActionWithTakeover(a.name, 'restart', { process: p.name, prepare: true, reason: 'restart with prepare from command palette' }))}>
+                          <Hammer className="size-4" /> Restart {key} with Prepare
+                        </CommandItem>,
+                      ]
+                    : []),
                   <CommandItem key={`stop-${key}`} value={`stop ${key}`}
                     onSelect={() => run(() => appActionWithTakeover(a.name, 'stop', { process: p.name, reason: 'stop from command palette' }))}>
                     <Square className="size-4" /> Stop {key}
