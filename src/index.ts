@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bus } from './events.js';
 import { ConfigStore, resolveDataDir } from './config.js';
 import { Store } from './db.js';
 import { ProcessManager } from './process-manager.js';
@@ -39,10 +40,29 @@ function readVersionInfo(): { commit: string; builtAt: number | null; startedAt:
 const config = new ConfigStore(path.join(ROOT, 'apps.yaml'));
 const store = new Store(dataDir);
 const pm = new ProcessManager(logsDir, store);
+pm.resolveDefs = (app, proc) => {
+  const appDef = config.getApp(app);
+  const procDef = appDef?.processes.find((p) => p.name === proc);
+  return appDef && procDef ? { appDef, procDef } : null;
+};
 const controller = new Controller(config, store, pm);
 controller.versionInfo = readVersionInfo();
 const health = new HealthMonitor(config, pm);
 controller.health = health;
+// restartOnUnhealthy: a process that was up but keeps failing its check gets bounced
+// through the normal restart path. Like crash auto-restart it ignores leases (force):
+// whoever holds the app wants a dead dependency back, not a CONFLICT in the daemon log.
+health.onUnhealthy = async (app, proc, streak) => {
+  const reason = `health check failed ${streak}× in a row — automatic restart (restartOnUnhealthy)`;
+  store.audit({ session: 'system', source: 'system', action: 'unhealthy-restart', app, proc, detail: reason, result: 'restarting' });
+  bus.emit('unhealthy-restart', { app, proc, streak });
+  try {
+    const res = await controller.restart(app, proc, undefined, reason, { session: 'system', source: 'system' }, true);
+    if (!Array.isArray(res)) console.error(`[health] unhealthy-restart of ${app}/${proc} blocked: ${res.message}`);
+  } catch (err: any) {
+    console.error(`[health] unhealthy-restart of ${app}/${proc} failed: ${err.message}`);
+  }
+};
 health.start();
 const metrics = new MetricsMonitor(config, pm);
 controller.metrics = metrics;

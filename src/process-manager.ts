@@ -18,6 +18,7 @@ interface RuntimeEntry {
   mode: Mode;
   startedAt: number;
   stopRequested: boolean;
+  /** Which auto-restart attempt spawned this run (0 = started by a person/boot restore). */
   restartCount: number;
   exited: boolean;
   exitPromise: Promise<void>;
@@ -57,6 +58,16 @@ export function isPidAlive(pid: number): boolean {
 }
 
 const STAMPED_RE = /^\[\d{4}-\d{2}-\d{2}T/;
+
+/** autoRestart: true — attempts before giving up, and the fixed per-attempt delays. */
+const RESTART_MAX_ATTEMPTS = 3;
+const RESTART_STEP_MS = 2000;
+/** autoRestart: 'always' — exponential backoff cap. */
+const RESTART_MAX_BACKOFF_MS = 60_000;
+/** A run that survived this long counts as stable: the next crash starts a fresh budget
+ * at attempt 1 (systemd's StartLimitInterval / pm2's min_uptime). Without it a process
+ * that crashes three times over a whole day loses auto-restart for good. */
+const RESTART_STABLE_MS = 60_000;
 
 const ERROR_LINE_RE = /error|exception|fatal|panic|unhandled|EADDRINUSE|address already in use|failed/i;
 
@@ -102,6 +113,10 @@ export class ProcessManager {
   baseEnv: Record<string, string> = {};
   /** Shell the current baseEnv was captured from (null until first successful capture). */
   baseEnvShell: string | null = null;
+  /** Current definitions from the config store, wired by the daemon. Runtime entries keep
+   * the definition they were spawned with; auto-restart must not reuse it — otherwise an
+   * apps.yaml edit (new command, new policy) only takes effect after a manual restart. */
+  resolveDefs?: (app: string, proc: string) => { appDef: AppDef; procDef: ProcessDef } | null;
 
   constructor(private logsDir: string, private store: Store) {}
 
@@ -281,6 +296,26 @@ export class ProcessManager {
   }
 
   private stopped = new Set<string>();
+  /** Scheduled auto-restart timers; a deliberate stop cancels them so a process the
+   * user just stopped doesn't pop back up when a long backoff delay elapses. */
+  private pendingRestart = new Map<string, NodeJS.Timeout>();
+
+  /** Working directory a process runs in (process cwd resolved against the app cwd). */
+  cwdFor(appDef: AppDef, procDef: ProcessDef): string {
+    return procDef.cwd ? path.resolve(appDef.cwd, procDef.cwd) : appDef.cwd;
+  }
+
+  /** Environment a process runs with.
+   * Layering: daemon env < captured shell env < app-wide env < active environment < process env */
+  envFor(appDef: AppDef, procDef: ProcessDef): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      ...this.baseEnv,
+      ...appDef.env,
+      ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
+      ...procDef.env,
+    };
+  }
 
   getState(app: string, proc: string): ProcState {
     const key = procKey(app, proc);
@@ -301,9 +336,11 @@ export class ProcessManager {
 
   async start(
     appDef: AppDef, procDef: ProcessDef, mode: Mode,
-    session: string, source: 'mcp' | 'ui' | 'system', takeover = false
+    session: string, source: 'mcp' | 'ui' | 'system', takeover = false,
+    opts: { restartAttempt?: number } = {}
   ): Promise<ProcState> {
     const key = procKey(appDef.name, procDef.name);
+    this.cancelPendingRestart(key);
     if (this.isRunning(appDef.name, procDef.name)) {
       return this.getState(appDef.name, procDef.name);
     }
@@ -311,7 +348,7 @@ export class ProcessManager {
     if (!command) {
       throw new Error(`Process '${key}' has no ${mode === 'dev' ? 'devCommand' : 'command'} defined`);
     }
-    const cwd = procDef.cwd ? path.resolve(appDef.cwd, procDef.cwd) : appDef.cwd;
+    const cwd = this.cwdFor(appDef, procDef);
     if (!fs.existsSync(cwd)) {
       throw new Error(`Working directory does not exist: ${cwd}`);
     }
@@ -331,16 +368,7 @@ export class ProcessManager {
       child = spawn(command, {
         shell: true,
         cwd,
-        // Layering: daemon env < captured shell env < app-wide env < active environment < process env
-        env: {
-          ...process.env,
-          ...this.baseEnv,
-          ...appDef.env,
-          ...(appDef.activeEnvironment ? appDef.environments[appDef.activeEnvironment] ?? {} : {}),
-          ...procDef.env,
-          FORCE_COLOR: '1',
-          CLICOLOR_FORCE: '1',
-        },
+        env: { ...this.envFor(appDef, procDef), FORCE_COLOR: '1', CLICOLOR_FORCE: '1' },
         detached: true,
         stdio: ['ignore', logFd, logFd],
       });
@@ -356,7 +384,11 @@ export class ProcessManager {
       mode,
       startedAt: Date.now(),
       stopRequested: false,
-      restartCount: this.runtime.get(key)?.restartCount ?? 0,
+      // Only the auto-restart path carries a count forward. A start by a person (or boot
+      // restore) is a fresh run with a full budget — previously the old entry's count was
+      // inherited by every start, so once the budget was spent, auto-restart stayed dead
+      // until the daemon itself restarted.
+      restartCount: opts.restartAttempt ?? 0,
       exited: false,
       exitPromise,
       resolveExit,
@@ -468,20 +500,75 @@ export class ProcessManager {
         result: 'crashed',
       });
       bus.emit('crash', { app: appDef.name, proc: procDef.name, code, summary: exit.summary });
-      if (procDef.autoRestart && entry.restartCount < 3) {
-        const delay = 2000 * (entry.restartCount + 1);
-        this.appendLog(key, `--- [controller] auto-restarting in ${delay}ms (attempt ${entry.restartCount + 1}/3)`);
-        setTimeout(() => {
-          if (this.isRunning(appDef.name, procDef.name)) return;
-          this.start(appDef, procDef, mode, 'system', 'system')
-            .then(() => {
-              const rt = this.runtime.get(key);
-              if (rt) rt.restartCount = entry.restartCount + 1;
-            })
-            .catch((err) => this.appendLog(key, `--- [controller] auto-restart failed: ${err.message}`));
-        }, delay);
-      }
+      this.scheduleAutoRestart(key, entry, exit.at);
     }
+  }
+
+  /**
+   * Decide whether (and when) a crashed process comes back on its own.
+   * - A run that stayed up ≥ RESTART_STABLE_MS wipes the slate: this crash is attempt 1.
+   * - `true`: fixed 2s/4s/6s, then give up (audited + notified — the moment you want to
+   *   hear about is "I stopped trying", not the crash itself).
+   * - `'always'`: exponential backoff 2s, 4s, 8s … capped at 60s, forever. Built for
+   *   processes whose failures are environmental (network change killing an SSH tunnel):
+   *   a fixed 3-shot budget is spent in 12s, well before the network is back.
+   * The attempt number travels with the new run (start opts), so a run that dies inside
+   * the 400ms fail-fast window is still counted exactly once.
+   */
+  private scheduleAutoRestart(key: string, entry: RuntimeEntry, crashedAt: number): void {
+    const { mode } = entry;
+    // Always decide (and later spawn) from the CURRENT definition, not the one this run
+    // was started with. A process removed from the config simply stays down.
+    const current = this.resolveDefs?.(entry.appDef.name, entry.procDef.name);
+    if (this.resolveDefs && !current) {
+      this.appendLog(key, `--- [controller] not auto-restarting: process no longer defined in the configuration`);
+      return;
+    }
+    const { appDef, procDef } = current ?? entry;
+    if (!procDef.autoRestart) return;
+    const uptime = crashedAt - entry.startedAt;
+    const prior = uptime >= RESTART_STABLE_MS ? 0 : entry.restartCount;
+    const attempt = prior + 1;
+    const unlimited = procDef.autoRestart === 'always';
+    if (!unlimited && attempt > RESTART_MAX_ATTEMPTS) {
+      this.appendLog(
+        key,
+        `--- [controller] auto-restart gave up: ${RESTART_MAX_ATTEMPTS} attempts failed within ${RESTART_STABLE_MS / 1000}s — start it manually (or set autoRestart: always)`
+      );
+      this.store.audit({
+        session: 'system', source: 'system', action: 'auto-restart-gave-up',
+        app: appDef.name, proc: procDef.name,
+        detail: `${RESTART_MAX_ATTEMPTS} attempts failed within ${RESTART_STABLE_MS / 1000}s`, result: 'crashed',
+      });
+      bus.emit('restart-gave-up', { app: appDef.name, proc: procDef.name, attempts: RESTART_MAX_ATTEMPTS });
+      return;
+    }
+    const delay = unlimited
+      ? Math.min(RESTART_STEP_MS * 2 ** Math.min(prior, 10), RESTART_MAX_BACKOFF_MS)
+      : RESTART_STEP_MS * attempt;
+    const label = unlimited ? `attempt ${attempt}, retrying until it stays up` : `attempt ${attempt}/${RESTART_MAX_ATTEMPTS}`;
+    this.appendLog(key, `--- [controller] auto-restarting in ${delay}ms (${label})`);
+    this.cancelPendingRestart(key);
+    const timer = setTimeout(() => {
+      this.pendingRestart.delete(key);
+      if (this.isRunning(appDef.name, procDef.name)) return;
+      this.start(appDef, procDef, mode, 'system', 'system', false, { restartAttempt: attempt })
+        .catch((err) => {
+          this.appendLog(key, `--- [controller] auto-restart failed: ${err.message}`);
+          // start() threw before spawning (port held by a stranger, missing cwd…): there
+          // is no child whose exit would re-enter this loop, so keep the policy alive here.
+          const ghost: RuntimeEntry = { ...entry, appDef, procDef, restartCount: attempt, startedAt: Date.now() };
+          this.scheduleAutoRestart(key, ghost, Date.now());
+        });
+    }, delay);
+    this.pendingRestart.set(key, timer);
+  }
+
+  private cancelPendingRestart(key: string): void {
+    const t = this.pendingRestart.get(key);
+    if (!t) return;
+    clearTimeout(t);
+    this.pendingRestart.delete(key);
   }
 
   /**
@@ -539,6 +626,10 @@ export class ProcessManager {
     // Deliberate stops remove the process from boot-restore state; the daemon's own
     // shutdown (stopAll) keeps it so processes come back after a daemon restart.
     if (clearRestore) this.store.clearRunning(app, proc);
+    if (this.pendingRestart.has(key)) {
+      this.appendLog(key, `--- [controller] stop requested — cancelling the scheduled auto-restart`);
+      this.cancelPendingRestart(key);
+    }
     const entry = this.runtime.get(key);
     if (!entry || !this.isRunning(app, proc)) {
       this.stopped.add(key);

@@ -12,9 +12,11 @@ export interface ProcInfo {
   devCommand: string | null
   cwd: string | null
   env: Record<string, string>
-  autoRestart: boolean
+  autoRestart: boolean | 'always'
   healthUrl: string | null
   healthPort: number | null
+  healthCommand: string | null
+  restartOnUnhealthy: number | null
   ownLogTimestamps: boolean
   ports: number[]
   dependsOn: string[]
@@ -126,9 +128,11 @@ export interface AppDefInput {
     devCommand?: string
     cwd?: string
     env: Record<string, string>
-    autoRestart: boolean
+    autoRestart: boolean | 'always'
     healthUrl?: string
     healthPort?: number
+    healthCommand?: string
+    restartOnUnhealthy?: number
     ownLogTimestamps?: boolean
     ports?: number[]
     dependsOn?: string[]

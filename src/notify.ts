@@ -40,12 +40,29 @@ export async function sendNotification(config: ConfigStore, title: string, body:
 /** Sends crash notifications (throttled per process). */
 export function startNotifier(config: ConfigStore): void {
   const lastNotified = new Map<string, number>();
+  const throttled = (key: string): boolean => {
+    const now = Date.now();
+    if ((lastNotified.get(key) ?? 0) > now - 5 * 60_000) return true; // throttle per process
+    lastNotified.set(key, now);
+    return false;
+  };
 
   bus.on('crash', (e: CrashEvent) => {
     const key = `${e.app}/${e.proc}`;
-    const now = Date.now();
-    if ((lastNotified.get(key) ?? 0) > now - 5 * 60_000) return; // throttle per process
-    lastNotified.set(key, now);
+    if (throttled(key)) return;
     void sendNotification(config, `${key} crashed (exit ${e.code ?? '?'})`, e.summary || 'see logs in the dashboard');
+  });
+
+  // Never throttled: this is the terminal event — nothing else will bring the process back.
+  bus.on('restart-gave-up', (e: { app: string; proc: string; attempts: number }) => {
+    const key = `${e.app}/${e.proc}`;
+    lastNotified.set(key, Date.now());
+    void sendNotification(config, `${key} is down — auto-restart gave up`, `${e.attempts} restart attempts failed in a row; start it manually from the dashboard`);
+  });
+
+  bus.on('unhealthy-restart', (e: { app: string; proc: string; streak: number }) => {
+    const key = `${e.app}/${e.proc}`;
+    if (throttled(key)) return;
+    void sendNotification(config, `${key} restarted: health check failing`, `${e.streak} consecutive health checks failed — restarting automatically`);
   });
 }

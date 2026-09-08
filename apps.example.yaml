@@ -17,7 +17,9 @@ apps:
         command: npm run start          # normal mode
         devCommand: npm run dev         # optional, used with mode=dev
         env: {}                         # optional extra env vars
-        autoRestart: false              # restart automatically on crash (max 3 attempts)
+        # Crash policy: true = up to 3 attempts (2s/4s/6s; the budget refills after 60s
+        # of uptime and on every manual start), always = never give up, backoff 2s→60s
+        autoRestart: false
         healthUrl: http://127.0.0.1:3000/   # optional readiness check (any HTTP < 500 = healthy)
         ports: [3000]                   # ports it binds — checked before start
         ownLogTimestamps: false         # true if the app's log lines already have timestamps
@@ -47,3 +49,13 @@ apps:
         command: npm run worker
         cwd: worker                     # optional subdirectory relative to app cwd
         autoRestart: true
+      - name: tunnel
+        # A long-lived SSH port-forward: failures are environmental (network change,
+        # laptop sleep), so retry forever with backoff instead of a 3-shot budget.
+        command: ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -L 127.0.0.1:15432:db:5432 me@bastion
+        autoRestart: always
+        # ssh's local listener accepts TCP even when the remote side is gone, so probe
+        # THROUGH the tunnel (exit 0 = healthy) and bounce it after 3 failed checks.
+        healthCommand: pg_isready -h 127.0.0.1 -p 15432 -t 3
+        restartOnUnhealthy: 3
+        ports: [15432]

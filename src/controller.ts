@@ -554,6 +554,8 @@ export class Controller {
           autoRestart: p.autoRestart,
           healthUrl: p.healthUrl ?? null,
           healthPort: p.healthPort ?? null,
+          healthCommand: p.healthCommand ?? null,
+          restartOnUnhealthy: p.restartOnUnhealthy ?? null,
           ownLogTimestamps: p.ownLogTimestamps,
           ports: p.ports,
           dependsOn: p.dependsOn,

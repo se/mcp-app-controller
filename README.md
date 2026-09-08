@@ -142,11 +142,39 @@ values, as do app-wide `env:` and the active environment set via `set_environmen
 
 ### Health checks
 
-A process definition can declare `healthUrl` (HTTP GET, any response < 500 = healthy) or
-`healthPort` (TCP connect on 127.0.0.1). The daemon polls every 5s; the UI shows an amber
-pulsing dot + "unhealthy" badge for running-but-unhealthy processes. MCP `start_app` /
-`restart_app` default to `wait_ready: true` — they block (max 30s) until the health check
-passes and report readiness, so Claude sessions know the app is actually up.
+A process definition can declare `healthUrl` (HTTP GET, any response < 500 = healthy),
+`healthPort` (TCP connect on 127.0.0.1) or `healthCommand` (shell command, exit 0 =
+healthy; runs in the process cwd with the process env, 5s timeout). The daemon polls every
+5s; the UI shows an amber pulsing dot + "unhealthy" badge for running-but-unhealthy
+processes. MCP `start_app` / `restart_app` default to `wait_ready: true` — they block
+(max 30s) until the health check passes and report readiness, so Claude sessions know the
+app is actually up.
+
+`healthCommand` is the one that can look *through* a process: an SSH port-forward's local
+listener accepts TCP connections even when the remote session is dead, so `healthPort`
+happily reports "healthy" for a broken tunnel, while `pg_isready` through the tunnel does not.
+
+Add `restartOnUnhealthy: <n>` to bounce a process after `n` consecutive failed checks.
+Failures are only counted once the current run has been healthy at least once, so a slow
+startup is never killed. The restart goes through the normal restart path (queue,
+`dependsOn`, audit as `unhealthy-restart`, notification) and ignores leases, like crash
+auto-restart does.
+
+### Crash auto-restart
+
+`autoRestart` decides what happens when a process exits on its own:
+
+- `true` — up to 3 attempts at 2s / 4s / 6s. A run that stays up for 60s refills the
+  budget, and any manual start or restart resets it, so a process that crashes a few times
+  over a day never silently loses auto-restart. When the budget is spent the daemon says so
+  in the log, audits `auto-restart-gave-up` and sends a notification (never throttled —
+  that is the moment you need to hear about, not the crash itself).
+- `always` — never give up: exponential backoff 2s, 4s, 8s … capped at 60s, retried until
+  the process stays up. Meant for processes whose failures are environmental (an SSH tunnel
+  dying on a network change): a fixed 3-shot budget is spent in 12 seconds, long before
+  the network is back.
+
+A deliberate stop cancels any scheduled auto-restart.
 
 ## Register with Claude Code (all sessions)
 

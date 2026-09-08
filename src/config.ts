@@ -11,10 +11,23 @@ export const ProcessDefSchema = z.object({
   devCommand: z.string().optional(),
   cwd: z.string().optional(),
   env: z.record(z.string()).default({}),
-  autoRestart: z.boolean().default(false),
-  // Optional readiness check: HTTP GET (any response < 500 counts as healthy) or TCP connect
+  // Crash policy. `true`: up to 3 attempts (2s/4s/6s); the budget refills once the
+  // process has stayed up 60s, and any manual start/restart resets it. `always`: never
+  // give up — exponential backoff 2s → 60s cap, retried indefinitely (tunnels, watchers,
+  // anything whose failures are usually environmental, e.g. a network change).
+  autoRestart: z.union([z.boolean(), z.literal('always')]).default(false),
+  // Optional readiness check, first match wins: HTTP GET (any response < 500 counts as
+  // healthy), TCP connect on 127.0.0.1, or a shell command (exit 0 = healthy; run in the
+  // process cwd with the process env, 5s timeout). A command is the only way to verify
+  // something end-to-end — e.g. an SSH port-forward's local listener accepts TCP even
+  // when the remote side is dead, so only a probe through the tunnel tells the truth.
   healthUrl: z.string().optional(),
   healthPort: z.number().int().optional(),
+  healthCommand: z.string().optional(),
+  // Restart the process after this many CONSECUTIVE failed health checks (5s apart).
+  // Failures only count once the current run has been healthy at least once, so a
+  // slow startup is never killed; the restart goes through the normal restart path.
+  restartOnUnhealthy: z.number().int().min(1).optional(),
   // The app's own log lines already carry timestamps — the UI hides the controller's prefix
   ownLogTimestamps: z.boolean().default(false),
   // TCP ports this process binds; checked before start (fail fast on conflicts, reclaim own orphans)
@@ -601,9 +614,11 @@ export class ConfigStore {
       if (p.devCommand) o.devCommand = p.devCommand;
       if (p.cwd) o.cwd = p.cwd;
       if (Object.keys(p.env).length > 0) o.env = p.env;
-      if (p.autoRestart) o.autoRestart = true;
+      if (p.autoRestart) o.autoRestart = p.autoRestart;
       if (p.healthUrl) o.healthUrl = p.healthUrl;
       if (p.healthPort != null) o.healthPort = p.healthPort;
+      if (p.healthCommand) o.healthCommand = p.healthCommand;
+      if (p.restartOnUnhealthy != null) o.restartOnUnhealthy = p.restartOnUnhealthy;
       if (p.ownLogTimestamps) o.ownLogTimestamps = true;
       if (p.ports.length > 0) o.ports = p.ports;
       if (p.dependsOn.length > 0) o.dependsOn = p.dependsOn;

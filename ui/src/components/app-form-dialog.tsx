@@ -28,18 +28,26 @@ interface ProcForm {
   devCommand: string
   cwd: string
   env: Record<string, string>
-  autoRestart: boolean
+  autoRestart: 'off' | 'limited' | 'always'
   healthUrl: string
   healthPort: string
+  healthCommand: string
+  restartOnUnhealthy: string
   ownLogTimestamps: boolean
   ports: string
   dependsOn: string
 }
 
 const emptyProc: ProcForm = {
-  name: '', command: '', devCommand: '', cwd: '', env: {}, autoRestart: false,
-  healthUrl: '', healthPort: '', ownLogTimestamps: false, ports: '', dependsOn: '',
+  name: '', command: '', devCommand: '', cwd: '', env: {}, autoRestart: 'off',
+  healthUrl: '', healthPort: '', healthCommand: '', restartOnUnhealthy: '',
+  ownLogTimestamps: false, ports: '', dependsOn: '',
 }
+
+const toRestartForm = (v: boolean | 'always'): ProcForm['autoRestart'] =>
+  v === 'always' ? 'always' : v ? 'limited' : 'off'
+const fromRestartForm = (v: ProcForm['autoRestart']): boolean | 'always' =>
+  v === 'always' ? 'always' : v === 'limited'
 
 function SectionDivider({ label, className }: { label: string; className?: string }) {
   return (
@@ -90,9 +98,11 @@ export function AppFormDialog({
           devCommand: p.devCommand ?? '',
           cwd: p.cwd ?? '',
           env: p.env ?? {},
-          autoRestart: p.autoRestart,
+          autoRestart: toRestartForm(p.autoRestart),
           healthUrl: p.healthUrl ?? '',
           healthPort: p.healthPort != null ? String(p.healthPort) : '',
+          healthCommand: p.healthCommand ?? '',
+          restartOnUnhealthy: p.restartOnUnhealthy != null ? String(p.restartOnUnhealthy) : '',
           ownLogTimestamps: p.ownLogTimestamps ?? false,
           ports: (p.ports ?? []).join(', '),
           dependsOn: (p.dependsOn ?? []).join(', '),
@@ -138,9 +148,11 @@ export function AppFormDialog({
         devCommand: p.devCommand.trim() || undefined,
         cwd: p.cwd.trim() || undefined,
         env: p.env,
-        autoRestart: p.autoRestart,
+        autoRestart: fromRestartForm(p.autoRestart),
         healthUrl: p.healthUrl.trim() || undefined,
         healthPort: p.healthPort.trim() ? Number(p.healthPort.trim()) : undefined,
+        healthCommand: p.healthCommand.trim() || undefined,
+        restartOnUnhealthy: p.restartOnUnhealthy.trim() ? Number(p.restartOnUnhealthy.trim()) : undefined,
         ownLogTimestamps: p.ownLogTimestamps,
         ports: p.ports
           .split(/[\s,]+/)
@@ -274,6 +286,16 @@ export function AppFormDialog({
                     placeholder="3000" inputMode="numeric" className="font-mono text-xs" />
                 </div>
                 <div className="grid gap-1.5">
+                  <Label className="text-xs">Health command<span className="font-normal text-muted-foreground">optional, exit 0 = healthy</span></Label>
+                  <Input value={p.healthCommand} onChange={(e) => updateProc(i, { healthCommand: e.target.value })}
+                    placeholder="pg_isready -h 127.0.0.1 -p 15432 -t 3" className="font-mono text-xs" />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Restart when unhealthy<span className="font-normal text-muted-foreground">optional, failed checks in a row</span></Label>
+                  <Input value={p.restartOnUnhealthy} onChange={(e) => updateProc(i, { restartOnUnhealthy: e.target.value })}
+                    placeholder="3" inputMode="numeric" className="font-mono text-xs" />
+                </div>
+                <div className="grid gap-1.5">
                   <Label className="text-xs">Ports<span className="font-normal text-muted-foreground">optional, comma separated</span></Label>
                   <Input value={p.ports} onChange={(e) => updateProc(i, { ports: e.target.value })}
                     placeholder="4070, 4470" className="font-mono text-xs" />
@@ -286,8 +308,15 @@ export function AppFormDialog({
               </div>
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                 <div className="flex items-center gap-2">
-                  <Switch size="sm" checked={p.autoRestart} onCheckedChange={(v) => updateProc(i, { autoRestart: v })} />
-                  <Label className="text-xs text-muted-foreground">auto-restart on crash</Label>
+                  <Label className="text-xs text-muted-foreground">on crash</Label>
+                  <Select value={p.autoRestart} onValueChange={(v) => updateProc(i, { autoRestart: v as ProcForm['autoRestart'] })}>
+                    <SelectTrigger size="sm" className="w-52 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off">stay down</SelectItem>
+                      <SelectItem value="limited">restart, up to 3 attempts</SelectItem>
+                      <SelectItem value="always">restart always (backoff, never give up)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch size="sm" checked={p.ownLogTimestamps} onCheckedChange={(v) => updateProc(i, { ownLogTimestamps: v })} />
