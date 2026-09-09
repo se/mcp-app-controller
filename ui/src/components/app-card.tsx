@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { RestartSplitButton } from '@/components/restart-split-button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, getLogs, isStarting, releaseLease, revealInFinder, type AppInfo, type ProcInfo } from '@/lib/api'
+import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, fmtLeft, getLogs, isStarting, releaseLease, revealInFinder, type AppInfo, type ProcInfo } from '@/lib/api'
 import { Elapsed, Uptime } from '@/components/uptime'
 import { logBus } from '@/lib/log-bus'
 import { ChevronDown, ChevronRight, Eraser, FileText, FolderOpen, Lock, Pencil, Pin, Play, Square, Timer, Trash2, Wrench } from 'lucide-react'
@@ -153,7 +153,7 @@ function AppCardInner({
   const appBusy = ops.length > 0
   const isRestarting = (proc: string) => ops.some((o) => o.proc === proc && o.kind === 'restart')
 
-  const leaseMinsLeft = app.lease ? Math.max(0, Math.round((app.lease.expires_at - Date.now()) / 60000)) : 0
+  const leaseLeft = app.lease ? fmtLeft(app.lease.expires_at - Date.now()) : ''
   const runningCount = app.processes.filter((p) => p.status === 'running').length
   const allRunning = runningCount === app.processes.length
   // Server-side state survives page refreshes (local `busy` does not) — while a
@@ -353,7 +353,7 @@ function AppCardInner({
           <span className="flex min-w-0 items-center gap-1.5">
             <Lock className="size-3.5 shrink-0" />
             <span className="truncate">
-              held by <b>{app.lease.session}</b> — “{app.lease.reason}” ({leaseMinsLeft}m left)
+              held by <b>{app.lease.session}</b> — “{app.lease.reason}” ({leaseLeft} left)
             </span>
           </span>
           <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-amber-700 hover:text-amber-600 dark:text-amber-500 dark:hover:text-amber-400"

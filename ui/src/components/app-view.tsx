@@ -14,6 +14,7 @@ import {
   appActionWithTakeover,
   fmtAgo,
   fmtElapsed,
+  fmtLeft,
   getMetricsHistory,
   isStarting,
   releaseLease,
@@ -222,7 +223,7 @@ export function AppView({
   const totalCpu = Math.round(running.reduce((s, p) => s + (p.metrics?.cpu ?? 0), 0) * 10) / 10
   const totalMem = running.reduce((s, p) => s + (p.metrics?.memMb ?? 0), 0)
   const appAudit = audit.filter((e) => e.app === app.name).slice(0, 8)
-  const leaseMinsLeft = app.lease ? Math.max(0, Math.round((app.lease.expires_at - Date.now()) / 60000)) : 0
+  const leaseLeft = app.lease ? fmtLeft(app.lease.expires_at - Date.now()) : ''
 
   return (
     <div className="flex flex-col gap-4">
@@ -280,7 +281,7 @@ export function AppView({
           <span className="flex min-w-0 items-center gap-1.5">
             <Lock className="size-3.5 shrink-0" />
             <span className="truncate">
-              held by <b>{app.lease.session}</b> — “{app.lease.reason}” ({leaseMinsLeft}m left)
+              held by <b>{app.lease.session}</b> — “{app.lease.reason}” ({leaseLeft} left)
             </span>
           </span>
           <Button variant="ghost" size="sm" className="h-6 px-2 text-xs"

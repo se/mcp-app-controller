@@ -75,6 +75,13 @@ export function fmtElapsed(ms: number): string {
   return `${m}m ${String(s % 60).padStart(2, '0')}s`
 }
 
+/** Remaining ms → "42s" under a minute, "5m" otherwise (never negative). */
+export function fmtLeft(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  return `${Math.round(s / 60)}m`
+}
+
 /** A process is "starting" until its first healthy check of the current run. */
 export function isStarting(p: ProcInfo): boolean {
   return p.status === 'running' && p.health !== null && p.readyInMs === null
