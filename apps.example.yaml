@@ -40,6 +40,8 @@ apps:
     # (less downtime; a failed build leaves the app running).
     prepareOrder: after-stop
     staggerMs: 1000                     # optional pause between process starts (ms)
+    leaseSeconds: 60                    # how long a start/stop/restart holds the app for
+                                        # the acting session (default 300; 0 = no lease)
     processes:
       - name: api
         command: dotnet run --project src/Api/

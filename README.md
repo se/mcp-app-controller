@@ -71,6 +71,10 @@ Two optional app-level settings fix this:
   up matters more. Plain starts are unaffected (nothing is running to stop).
 - `staggerMs: <n>` — pause between process starts in a multi-process operation, to
   spread the CPU/RAM spikes of heavy dev servers (webpack etc.).
+- `leaseSeconds: <n>` — how long a start/stop/restart holds the app for the acting
+  session (default 300). Other sessions get a CONFLICT during that window. Lower it for
+  apps many sessions bounce independently (e.g. `10`); `0` disables the automatic lease
+  entirely (an explicit `claim_app` still works).
 
 ## Run
 

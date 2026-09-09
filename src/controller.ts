@@ -17,6 +17,7 @@ export interface AppStartSummary {
   procs: number;
 }
 
+/** Fallback for the automatic action lease when the app has no `leaseSeconds`. */
 export const ACTION_LEASE_MS = 5 * 60 * 1000;
 
 export interface ActorCtx {
@@ -308,7 +309,10 @@ export class Controller {
 
   private touchLease(appName: string, actor: ActorCtx, reason: string): void {
     if (actor.source === 'system') return; // boot-restore should not block sessions
-    this.store.setLease(appName, actor.session, reason, ACTION_LEASE_MS);
+    const seconds = this.config.getApp(appName)?.leaseSeconds;
+    const ttl = seconds == null ? ACTION_LEASE_MS : seconds * 1000;
+    if (ttl <= 0) return; // leaseSeconds: 0 — this app is never held by a plain action
+    this.store.setLease(appName, actor.session, reason, ttl);
   }
 
   async start(
@@ -542,6 +546,7 @@ export class Controller {
         source: this.config.sourceOf(app.name) ?? null,
         envOrigins: this.config.envOriginsOf(app.name),
         staggerMs: app.staggerMs,
+        leaseSeconds: app.leaseSeconds,
         preparing: this.preparing.has(app.name),
         lastStart: this.lastStart.get(app.name) ?? null,
         lease: leases.find((l) => l.app === app.name) ?? null,

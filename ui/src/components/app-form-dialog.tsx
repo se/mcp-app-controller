@@ -76,6 +76,7 @@ export function AppFormDialog({
   const [prepareOrder, setPrepareOrder] = useState<'after-stop' | 'before-stop'>('after-stop')
   const [clean, setClean] = useState('')
   const [staggerMs, setStaggerMs] = useState('')
+  const [leaseSeconds, setLeaseSeconds] = useState('')
   const [procs, setProcs] = useState<ProcForm[]>([{ ...emptyProc }])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -91,6 +92,7 @@ export function AppFormDialog({
       setPrepareOrder(editApp.prepareOrder ?? 'after-stop')
       setClean(editApp.clean ?? '')
       setStaggerMs(editApp.staggerMs > 0 ? String(editApp.staggerMs) : '')
+      setLeaseSeconds(editApp.leaseSeconds !== 300 ? String(editApp.leaseSeconds) : '')
       setProcs(
         editApp.processes.map((p) => ({
           name: p.name,
@@ -142,6 +144,7 @@ export function AppFormDialog({
       ...(prepare.trim() ? { prepare: prepare.trim(), prepareOrder } : {}),
       ...(clean.trim() ? { clean: clean.trim() } : {}),
       ...(Number(staggerMs) > 0 ? { staggerMs: Number(staggerMs) } : {}),
+      ...(leaseSeconds.trim() !== '' && Number.isInteger(Number(leaseSeconds)) ? { leaseSeconds: Math.max(0, Number(leaseSeconds)) } : {}),
       processes: procs.map((p) => ({
         name: p.name.trim(),
         command: p.command.trim(),
@@ -199,7 +202,7 @@ export function AppFormDialog({
               placeholder="/path/to/my-app" className="font-mono text-xs" />
           </div>
           <SectionDivider label="Build" className="mt-2" />
-          <div className="grid grid-cols-[1fr_120px] gap-3">
+          <div className="grid grid-cols-[1fr_120px_120px] gap-3">
             <div className="grid gap-1.5">
               <Label className="text-xs" htmlFor="app-prepare">Prepare command<span className="font-normal text-muted-foreground">optional</span></Label>
               <Input id="app-prepare" value={prepare} onChange={(e) => setPrepare(e.target.value)}
@@ -209,6 +212,11 @@ export function AppFormDialog({
               <Label className="text-xs" htmlFor="app-stagger">Stagger (ms)</Label>
               <Input id="app-stagger" value={staggerMs} onChange={(e) => setStaggerMs(e.target.value)}
                 placeholder="0" inputMode="numeric" className="text-xs" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label className="text-xs" htmlFor="app-lease">Action lease (s)<span className="font-normal text-muted-foreground">0 = none</span></Label>
+              <Input id="app-lease" value={leaseSeconds} onChange={(e) => setLeaseSeconds(e.target.value)}
+                placeholder="300" inputMode="numeric" className="text-xs" />
             </div>
           </div>
           {prepare.trim() !== '' && (

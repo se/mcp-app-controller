@@ -59,6 +59,7 @@ export interface AppInfo {
     processes: Record<string, Record<string, 'shared' | 'local'>>
   } | null
   staggerMs: number
+  leaseSeconds: number
   preparing: boolean
   /** Timing of the last whole-app start/restart (incl. prepare, until healthy) */
   lastStart: { at: number; prepareMs: number; totalMs: number; procs: number } | null
@@ -122,6 +123,7 @@ export interface AppDefInput {
   prepareOrder?: 'after-stop' | 'before-stop'
   clean?: string
   staggerMs?: number
+  leaseSeconds?: number
   processes: {
     name: string
     command: string
