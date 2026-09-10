@@ -513,7 +513,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
         clean: z.string().optional().describe('Optional one-shot "clear build cache" command run on demand via clear_build_cache — e.g. delete build outputs and clear the package cache so the next build restores fresh packages'),
         cleanTimeoutMs: z.number().int().optional().describe('Timeout for the clean command in ms (default 600000)'),
         staggerMs: z.number().int().optional().describe('Pause between process starts in a multi-process operation (default 0)'),
-        leaseSeconds: z.number().int().min(0).optional().describe('How long a start/stop/restart holds the app for the acting session, in seconds (default 300; 0 = no automatic lease). Other sessions get a CONFLICT during that window'),
+        leaseSeconds: z.number().int().min(0).max(15).optional().describe('How long a start/stop/restart holds the app for the acting session, in seconds (default and max 15; 0 = no automatic lease). Other sessions get a CONFLICT during that window'),
         processes: z
           .array(
             z.object({

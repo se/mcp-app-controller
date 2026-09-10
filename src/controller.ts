@@ -18,7 +18,7 @@ export interface AppStartSummary {
 }
 
 /** Fallback for the automatic action lease when the app has no `leaseSeconds`. */
-export const ACTION_LEASE_MS = 5 * 60 * 1000;
+export const ACTION_LEASE_MS = 15 * 1000;
 
 export interface ActorCtx {
   session: string; // short session id, 'ui', or 'system'

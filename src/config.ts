@@ -74,8 +74,8 @@ export const AppDefSchema = z
     staggerMs: z.number().int().min(0).default(0),
     // How long a start/stop/restart holds the app for the acting session (seconds).
     // Other sessions get a CONFLICT during that window. 0 disables the automatic
-    // lease (explicit claim_app still works). Default 300 (5 min).
-    leaseSeconds: z.number().int().min(0).default(300),
+    // lease (explicit claim_app still works). Default and maximum 15s.
+    leaseSeconds: z.number().int().min(0).max(15).default(15),
     processes: z.array(ProcessDefSchema).min(1),
   })
   .superRefine((app, ctx) => {
@@ -613,7 +613,7 @@ export class ConfigStore {
     if (def.clean) out.clean = def.clean;
     if (def.cleanTimeoutMs !== 600000) out.cleanTimeoutMs = def.cleanTimeoutMs;
     if (def.staggerMs > 0) out.staggerMs = def.staggerMs;
-    if (def.leaseSeconds !== 300) out.leaseSeconds = def.leaseSeconds;
+    if (def.leaseSeconds !== 15) out.leaseSeconds = def.leaseSeconds;
     out.processes = def.processes.map((p) => {
       const o: Raw = { name: p.name, command: p.command };
       if (p.devCommand) o.devCommand = p.devCommand;

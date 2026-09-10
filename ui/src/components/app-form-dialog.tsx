@@ -92,7 +92,7 @@ export function AppFormDialog({
       setPrepareOrder(editApp.prepareOrder ?? 'after-stop')
       setClean(editApp.clean ?? '')
       setStaggerMs(editApp.staggerMs > 0 ? String(editApp.staggerMs) : '')
-      setLeaseSeconds(editApp.leaseSeconds !== 300 ? String(editApp.leaseSeconds) : '')
+      setLeaseSeconds(editApp.leaseSeconds !== 15 ? String(editApp.leaseSeconds) : '')
       setProcs(
         editApp.processes.map((p) => ({
           name: p.name,
@@ -144,7 +144,7 @@ export function AppFormDialog({
       ...(prepare.trim() ? { prepare: prepare.trim(), prepareOrder } : {}),
       ...(clean.trim() ? { clean: clean.trim() } : {}),
       ...(Number(staggerMs) > 0 ? { staggerMs: Number(staggerMs) } : {}),
-      ...(leaseSeconds.trim() !== '' && Number.isInteger(Number(leaseSeconds)) ? { leaseSeconds: Math.max(0, Number(leaseSeconds)) } : {}),
+      ...(leaseSeconds.trim() !== '' && Number.isInteger(Number(leaseSeconds)) ? { leaseSeconds: Math.min(15, Math.max(0, Number(leaseSeconds))) } : {}),
       processes: procs.map((p) => ({
         name: p.name.trim(),
         command: p.command.trim(),
@@ -214,9 +214,9 @@ export function AppFormDialog({
                 placeholder="0" inputMode="numeric" className="text-xs" />
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-xs" htmlFor="app-lease">Action lease (s)<span className="font-normal text-muted-foreground">0 = none</span></Label>
+              <Label className="text-xs" htmlFor="app-lease">Action lease (s)<span className="font-normal text-muted-foreground">max 15, 0 = none</span></Label>
               <Input id="app-lease" value={leaseSeconds} onChange={(e) => setLeaseSeconds(e.target.value)}
-                placeholder="300" inputMode="numeric" className="text-xs" />
+                placeholder="15" inputMode="numeric" className="text-xs" />
             </div>
           </div>
           {prepare.trim() !== '' && (

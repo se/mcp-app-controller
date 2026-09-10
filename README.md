@@ -72,8 +72,8 @@ Two optional app-level settings fix this:
 - `staggerMs: <n>` — pause between process starts in a multi-process operation, to
   spread the CPU/RAM spikes of heavy dev servers (webpack etc.).
 - `leaseSeconds: <n>` — how long a start/stop/restart holds the app for the acting
-  session (default 300). Other sessions get a CONFLICT during that window. Lower it for
-  apps many sessions bounce independently (e.g. `10`); `0` disables the automatic lease
+  session (default and maximum 15). Other sessions get a CONFLICT during that window. Lower
+  it for apps many sessions bounce independently (e.g. `5`); `0` disables the automatic lease
   entirely (an explicit `claim_app` still works).
 
 ## Run
@@ -272,7 +272,7 @@ request"). Last request wins.
 
 ## Conflict model
 
-- Every mutating action records a 5-minute lease for the calling session and requires a `reason`.
+- Every mutating action records a short lease (max 15s, see `leaseSeconds`) for the calling session and requires a `reason`.
 - `claim_app` takes a longer lease (default 30 min) for multi-step work.
 - If another session holds an active lease, mutating calls return a **CONFLICT** message
   (who, why, how long ago) instead of executing. The session can retry with `force=true`.
