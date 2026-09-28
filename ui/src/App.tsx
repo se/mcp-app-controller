@@ -73,12 +73,19 @@ function Dashboard() {
 
   // Apps with nothing running are collapsed by default; an explicit expand is remembered.
   const [expandedStopped, setExpandedStopped] = useState<string[]>(() => loadPref('appctrl-expanded'))
+  // Switched-off apps are always collapsed; expanding one only lasts for this page view.
+  const [expandedOff, setExpandedOff] = useState<string[]>([])
   const isAppCollapsed = (app: AppInfo) => {
+    if (!app.enabled) return !expandedOff.includes(app.name)
     if (collapsed.includes(app.name)) return true
     const anyRunning = app.processes.some((p) => p.status === 'running')
     return !anyRunning && !expandedStopped.includes(app.name)
   }
   const toggleCollapse = (app: AppInfo) => {
+    if (!app.enabled) {
+      setExpandedOff((prev) => (prev.includes(app.name) ? prev.filter((x) => x !== app.name) : [...prev, app.name]))
+      return
+    }
     if (isAppCollapsed(app)) {
       setCollapsed((prev) => {
         const next = prev.filter((x) => x !== app.name)
@@ -105,11 +112,68 @@ function Dashboard() {
   }
 
 
-  // Pinned apps first (in pin order), the rest in config order
+  // Manual order of the unpinned apps (sidebar up/down arrows); apps not in the list
+  // yet (new ones) follow in config order.
+  const [order, setOrder] = useState<string[]>(() => loadPref('appctrl-order'))
+  const unpinnedOrdered = useMemo(() => {
+    const rank = (name: string, i: number) => {
+      const k = order.indexOf(name)
+      return k >= 0 ? k : order.length + i
+    }
+    return apps
+      .map((a, i) => ({ a, r: rank(a.name, i) }))
+      .filter((x) => !pinned.includes(x.a.name))
+      .sort((x, y) => x.r - y.r)
+      .map((x) => x.a)
+  }, [apps, pinned, order])
+
+  // Pinned apps first (in pin order), then the manual order; switched-off apps
+  // (pinned or not) sink to the bottom, keeping that same relative order.
   const sortedApps = useMemo(() => {
     const pinnedApps = pinned.map((n) => apps.find((a) => a.name === n)).filter(Boolean) as AppInfo[]
-    return [...pinnedApps, ...apps.filter((a) => !pinned.includes(a.name))]
-  }, [apps, pinned])
+    const ordered = [...pinnedApps, ...unpinnedOrdered]
+    return [...ordered.filter((a) => a.enabled), ...ordered.filter((a) => !a.enabled)]
+  }, [apps, pinned, unpinnedOrdered])
+
+  /** Swap an app with its visible (switched-on) neighbour. Pinned and unpinned apps
+   * are separate groups — an app never crosses the boundary (use pin/unpin for that). */
+  const moveApp = (name: string, dir: -1 | 1) => {
+    const visible = sortedApps.filter((a) => a.enabled)
+    const i = visible.findIndex((a) => a.name === name)
+    const other = visible[i + dir]
+    if (i < 0 || !other) return
+    const isPinned = pinned.includes(name)
+    if (isPinned !== pinned.includes(other.name)) return
+    const swap = (list: string[]) => {
+      const next = [...list]
+      const x = next.indexOf(name)
+      const y = next.indexOf(other.name)
+      ;[next[x], next[y]] = [next[y], next[x]]
+      return next
+    }
+    if (isPinned) {
+      const next = swap(pinned)
+      setPinned(next)
+      savePref('appctrl-pinned', next)
+    } else {
+      const next = swap(unpinnedOrdered.map((a) => a.name))
+      setOrder(next)
+      savePref('appctrl-order', next)
+    }
+  }
+
+  // Toggling an app on/off would re-sort it away from under the cursor (and put a
+  // different app's switch there). Hold the current order from the toggle until the
+  // pointer leaves the list, then let it settle.
+  const [heldOrder, setHeldOrder] = useState<string[] | null>(null)
+  const sortedRef = useRef(sortedApps)
+  sortedRef.current = sortedApps
+  const holdOrder = useCallback(() => setHeldOrder((prev) => prev ?? sortedRef.current.map((a) => a.name)), [])
+  const listedApps = useMemo(() => {
+    if (!heldOrder) return sortedApps
+    const held = heldOrder.map((n) => apps.find((a) => a.name === n)).filter(Boolean) as AppInfo[]
+    return [...held, ...sortedApps.filter((a) => !heldOrder.includes(a.name))]
+  }, [heldOrder, sortedApps, apps])
 
   const [refreshing, setRefreshing] = useState(false)
   const lastRefreshAt = useRef(0)
@@ -223,6 +287,8 @@ function Dashboard() {
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar
         apps={sortedApps}
+        pinned={pinned}
+        onMoveApp={moveApp}
         profiles={profiles}
         view={view}
         onNavigate={setView}
@@ -306,13 +372,13 @@ function Dashboard() {
             ) : view !== 'activity' ? (
               <>
                 <StatTiles apps={apps} />
-                <section className="flex min-w-0 flex-col gap-4">
+                <section className="flex min-w-0 flex-col gap-4" onMouseLeave={() => setHeldOrder(null)}>
                   {apps.length === 0 ? (
                     <div className="rounded-xl border border-dashed bg-card p-16 text-center text-muted-foreground">
                       No apps defined yet. Click <span className="font-medium text-foreground">New App</span> to add one.
                     </div>
                   ) : (
-                    sortedApps.map((app) => (
+                    listedApps.map((app) => (
                       <div key={app.name} id={`app-${app.name}`}>
                         <AppCard
                           app={app}
@@ -324,6 +390,7 @@ function Dashboard() {
                           onLogs={(proc) => dockRef.current?.open(app.name, proc)}
                           onEdit={() => { setEditApp(app); setFormOpen(true) }}
                           onChanged={refresh}
+                          onBeforeToggleEnabled={holdOrder}
                         />
                       </div>
                     ))

@@ -79,10 +79,10 @@ export function CommandPalette({
                 <Hammer className="size-4" /> Restart {a.name} with Prepare (all)
               </CommandItem>
             )}
-            <CommandItem value={`start ${a.name} all`}
+            {a.enabled && <CommandItem value={`start ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { mode: 'start', reason: 'start from command palette' }))}>
               <Play className="size-4" /> Start {a.name} (all)
-            </CommandItem>
+            </CommandItem>}
             <CommandItem value={`stop ${a.name} all`}
               onSelect={() => run(() => appActionWithTakeover(a.name, 'stop', { reason: 'stop from command palette' }))}>
               <Square className="size-4" /> Stop {a.name} (all)
@@ -109,7 +109,7 @@ export function CommandPalette({
                     <Square className="size-4" /> Stop {key}
                   </CommandItem>
                 )
-              } else {
+              } else if (a.enabled) {
                 items.push(
                   <CommandItem key={`start-${key}`} value={`start ${key}`}
                     onSelect={() => run(() => appActionWithTakeover(a.name, 'start', { process: p.name, mode: 'start', reason: 'start from command palette' }))}>

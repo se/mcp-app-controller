@@ -24,6 +24,7 @@ import {
   type ProcInfo,
   type ProcMetrics,
 } from '@/lib/api'
+import { AppEnabledSwitch } from '@/components/app-enabled-switch'
 import { RestartSplitButton } from '@/components/restart-split-button'
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
@@ -252,8 +253,12 @@ export function AppView({
             </button>
           </div>
         </div>
-        <div className="flex shrink-0 gap-1.5">
-          {running.length < app.processes.length && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="mr-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            {app.enabled ? 'On' : 'Off'}
+            <AppEnabledSwitch app={app} onChanged={onChanged} />
+          </span>
+          {app.enabled && running.length < app.processes.length && (
             <Button variant="outline" size="sm" disabled={appBusy} onClick={() => act('start')}>
               <Play className="size-3.5" /> start all
             </Button>
@@ -296,7 +301,7 @@ export function AppView({
           <div className="flex items-center justify-between text-xs text-muted-foreground">Running <Activity className="size-3.5" /></div>
           <div className="text-2xl font-semibold tabular-nums">{running.length}<span className="text-sm text-muted-foreground">/{app.processes.length}</span></div>
           <div className="text-[11px] text-muted-foreground">
-            {crashed > 0 ? `${crashed} crashed` : unhealthy > 0 ? `${unhealthy} unhealthy` : 'all healthy'}
+            {!app.enabled ? 'switched off' : crashed > 0 ? `${crashed} crashed` : unhealthy > 0 ? `${unhealthy} unhealthy` : 'all healthy'}
           </div>
         </Card>
         <Card className="gap-1 p-4">

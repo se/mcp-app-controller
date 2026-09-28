@@ -73,7 +73,8 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       for (const app of state.apps) {
         const envTag = app.activeEnvironment ? ` [env: ${app.activeEnvironment}]` : '';
         const srcTag = app.source ? ` [shared config: ${app.source}]` : '';
-        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''}${envTag} (cwd: ${app.cwd})${srcTag}`);
+        const offTag = app.enabled ? '' : ' [OFF — switched off, will not be started]';
+        lines.push(`# ${app.name}${app.description ? ` — ${app.description}` : ''}${offTag}${envTag} (cwd: ${app.cwd})${srcTag}`);
         if (app.lease) {
           const left = Math.round((app.lease.expires_at - Date.now()) / 1000);
           lines.push(`  LEASE: held by session '${app.lease.session}' for "${app.lease.reason}" (expires in ${left}s)`);
@@ -506,6 +507,7 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       inputSchema: {
         name: z.string(),
         description: z.string().default(''),
+        enabled: z.boolean().optional().describe('On/off switch (default: keep the current value; true for a new app). A switched-off app is never started — manually, by profiles, boot restore or auto-restart — and is not reported as crashed. Switching off stops its running processes'),
         cwd: z.string().describe('Absolute path to the app root directory'),
         prepare: z.string().optional().describe('Optional build-once command run to completion before every start of this app, and before restarts that explicitly ask for it (shared across concurrent operations, 30s reuse window) — e.g. build shared projects once instead of every process compiling them concurrently; makes --no-build launch commands safe'),
         prepareTimeoutMs: z.number().int().optional().describe('Timeout for the prepare command in ms (default 600000)'),
@@ -536,8 +538,13 @@ export function buildMcpServer(controller: Controller, sessionId: string): McpSe
       },
     },
     async (input) => {
-      const def = AppDefSchema.parse(input);
+      const existing = controller.config.getApp(input.name);
+      const wantEnabled = input.enabled ?? existing?.enabled ?? true;
+      // The switch goes through setEnabled (stops processes on off, writes include
+      // apps' switch to .local.yaml); the definition itself keeps the current value.
+      const def = AppDefSchema.parse({ ...input, enabled: existing?.enabled ?? wantEnabled });
       controller.config.upsertApp(def);
+      if (wantEnabled !== def.enabled) await controller.setEnabled(def.name, wantEnabled, actor);
       controller.store.audit({
         session: actor.session, source: 'mcp', action: 'define_app', app: def.name,
         detail: `${def.processes.length} process(es)`, result: 'saved',

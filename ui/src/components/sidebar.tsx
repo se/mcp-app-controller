@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { getVersion, profileAction, type AppInfo, type VersionInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { History, LayoutDashboard, Layers, Play, Plus, Settings, Square } from 'lucide-react'
+import { ArrowDown, ArrowUp, History, LayoutDashboard, Layers, Play, Plus, Settings, Square } from 'lucide-react'
 
 const fmtBuildDate = (ms: number) =>
   new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -37,6 +37,8 @@ function appDotClass(app: AppInfo): string {
 
 export function Sidebar({
   apps,
+  pinned,
+  onMoveApp,
   profiles,
   view,
   onNavigate,
@@ -44,6 +46,8 @@ export function Sidebar({
   onSelectApp,
 }: {
   apps: AppInfo[]
+  pinned: string[]
+  onMoveApp: (name: string, dir: -1 | 1) => void
   profiles: Record<string, string[]>
   view: View
   onNavigate: (v: View) => void
@@ -98,25 +102,52 @@ export function Sidebar({
         {apps.length === 0 && (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">No apps yet</div>
         )}
-        {apps.map((app) => {
+        {apps.length > 0 && !apps.some((a) => a.enabled) && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">All apps are switched off</div>
+        )}
+        {/* Switched-off apps are left out — they're still on the dashboard (at the bottom). */}
+        {apps.filter((a) => a.enabled).map((app, i, visible) => {
           const running = app.processes.filter((p) => p.status === 'running').length
+          // Arrows only move within the same group (pinned apps stay above the rest).
+          const sameGroup = (other?: AppInfo) => !!other && pinned.includes(other.name) === pinned.includes(app.name)
+          const canUp = sameGroup(visible[i - 1])
+          const canDown = sameGroup(visible[i + 1])
           return (
-            <button
+            <div
               key={app.name}
-              onClick={() => onSelectApp(app.name)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                'group/app flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
                 view === `app:${app.name}`
                   ? 'bg-accent font-medium'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground'
               )}
             >
-              <span className={cn('size-2 shrink-0 rounded-full', appDotClass(app))} />
-              <span className="truncate">{app.name}</span>
-              <span className="ml-auto text-[10px] tabular-nums">
+              <button onClick={() => onSelectApp(app.name)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                <span className={cn('size-2 shrink-0 rounded-full', appDotClass(app))} />
+                <span className="truncate">{app.name}</span>
+              </button>
+              <span className="text-[10px] tabular-nums group-hover/app:hidden">
                 {running}/{app.processes.length}
               </span>
-            </button>
+              <span className="hidden items-center gap-0.5 group-hover/app:flex">
+                <button
+                  onClick={() => onMoveApp(app.name, -1)}
+                  disabled={!canUp}
+                  title="Move up"
+                  className="flex size-5 items-center justify-center rounded border bg-background text-foreground shadow-xs hover:border-primary hover:bg-primary hover:text-primary-foreground disabled:pointer-events-none disabled:opacity-25"
+                >
+                  <ArrowUp className="size-3" strokeWidth={2.5} />
+                </button>
+                <button
+                  onClick={() => onMoveApp(app.name, 1)}
+                  disabled={!canDown}
+                  title="Move down"
+                  className="flex size-5 items-center justify-center rounded border bg-background text-foreground shadow-xs hover:border-primary hover:bg-primary hover:text-primary-foreground disabled:pointer-events-none disabled:opacity-25"
+                >
+                  <ArrowDown className="size-3" strokeWidth={2.5} />
+                </button>
+              </span>
+            </div>
           )
         })}
         {Object.keys(profiles).length > 0 && (

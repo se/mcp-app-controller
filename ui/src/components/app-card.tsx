@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { AppEnabledSwitch } from '@/components/app-enabled-switch'
 import { RestartSplitButton } from '@/components/restart-split-button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -119,6 +120,7 @@ function AppCardInner({
   onLogs,
   onEdit,
   onChanged,
+  onBeforeToggleEnabled,
 }: {
   app: AppInfo
   pinned: boolean
@@ -129,6 +131,7 @@ function AppCardInner({
   onLogs: (proc: string) => void
   onEdit: () => void
   onChanged: () => void
+  onBeforeToggleEnabled?: () => void
 }) {
   const [ops, setOps] = useState<Op[]>([])
 
@@ -165,7 +168,7 @@ function AppCardInner({
   )
 
   return (
-    <Card className="group gap-0 overflow-hidden py-0">
+    <Card className={cn('group gap-0 overflow-hidden py-0', !app.enabled && 'opacity-60')}>
       <CardHeader className="flex flex-row items-center justify-between gap-4 px-5 py-3.5">
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -208,7 +211,7 @@ function AppCardInner({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {!allRunning && (
+          {app.enabled && !allRunning && (
             <Button variant="outline" size="sm" disabled={appBusy || inFlight}
               title={inFlight ? 'Start already in progress (preparing/starting)' : undefined}
               className="gap-1.5 font-medium text-emerald-700 hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
@@ -282,6 +285,9 @@ function AppCardInner({
             </span>
           )}
           <div className="ml-1 flex items-center gap-0.5 border-l pl-2">
+            <span className="mr-1.5 flex items-center">
+              <AppEnabledSwitch app={app} onChanged={onChanged} onBeforeToggle={onBeforeToggleEnabled} />
+            </span>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -329,6 +335,7 @@ function AppCardInner({
             const running = app.processes.filter((p) => p.status === 'running').length
             const crashed = app.processes.filter((p) => p.status === 'crashed').length
             const unhealthy = app.processes.filter((p) => p.status === 'running' && p.health === 'unhealthy').length
+            if (!app.enabled) return <span className="font-medium uppercase tracking-wide">Off</span>
             return (
               <>
                 <span className={cn(running > 0 && 'text-emerald-600 dark:text-emerald-400')}>
@@ -460,12 +467,14 @@ function AppCardInner({
                   </>
                 ) : (
                   <>
-                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={procBusy(p.name)}
+                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={procBusy(p.name) || !app.enabled}
+                      title={app.enabled ? undefined : 'App is switched off'}
                       onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
                       <Play className="size-3" /> start
                     </Button>
                     {p.devCommand && (
-                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={procBusy(p.name)}
+                      <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={procBusy(p.name) || !app.enabled}
+                        title={app.enabled ? undefined : 'App is switched off'}
                         onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
                         <Wrench className="size-3" /> dev
                       </Button>

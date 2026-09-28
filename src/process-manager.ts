@@ -324,10 +324,15 @@ export class ProcessManager {
       return { status: 'running', pid: rt.pid, mode: rt.mode, startedAt: rt.startedAt };
     }
     const exit = this.lastExit.get(key);
-    if (exit && !this.stopped.has(key)) {
+    // A switched-off app is "off", not broken — its last exit is history, not a crash.
+    if (exit && !this.stopped.has(key) && !this.isAppDisabled(app, proc)) {
       return { status: 'crashed', lastExit: exit };
     }
     return { status: 'stopped', lastExit: exit };
+  }
+
+  private isAppDisabled(app: string, proc: string): boolean {
+    return this.resolveDefs?.(app, proc)?.appDef.enabled === false;
   }
 
   isRunning(app: string, proc: string): boolean {
@@ -489,7 +494,7 @@ export class ProcessManager {
       if (!cur || cur.exited) this.detachTail(key);
     }, 1500);
 
-    if (!wasRequested) {
+    if (!wasRequested && !this.isAppDisabled(appDef.name, procDef.name)) {
       this.store.audit({
         session: 'system',
         source: 'system',
@@ -526,6 +531,10 @@ export class ProcessManager {
     }
     const { appDef, procDef } = current ?? entry;
     if (!procDef.autoRestart) return;
+    if (!appDef.enabled) {
+      this.appendLog(key, `--- [controller] not auto-restarting: app '${appDef.name}' is switched off`);
+      return;
+    }
     const uptime = crashedAt - entry.startedAt;
     const prior = uptime >= RESTART_STABLE_MS ? 0 : entry.restartCount;
     const attempt = prior + 1;
@@ -552,6 +561,7 @@ export class ProcessManager {
     const timer = setTimeout(() => {
       this.pendingRestart.delete(key);
       if (this.isRunning(appDef.name, procDef.name)) return;
+      if (this.isAppDisabled(appDef.name, procDef.name)) return; // switched off during the backoff
       this.start(appDef, procDef, mode, 'system', 'system', false, { restartAttempt: attempt })
         .catch((err) => {
           this.appendLog(key, `--- [controller] auto-restart failed: ${err.message}`);

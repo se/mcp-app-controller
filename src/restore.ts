@@ -75,6 +75,14 @@ export async function restoreOnBoot(controller: Controller): Promise<void> {
       controller.store.clearRunning(e.app, e.proc);
       continue;
     }
+    if (!app.enabled) {
+      // Switched off (e.g. apps.yaml edited while the daemon was down): don't bring it
+      // back, and don't leave an unmanaged leftover running either.
+      controller.store.clearRunning(e.app, e.proc);
+      if (e.pid && isPidAlive(e.pid) && (await adoptablePid(e.pid, e.updatedAt))) await reclaimOrphan(e.pid);
+      console.log(`[restore] ${e.app}/${e.proc} skipped — app is switched off`);
+      continue;
+    }
     if (e.pid && isPidAlive(e.pid)) {
       const info = await adoptablePid(e.pid, e.updatedAt);
       if (info) {

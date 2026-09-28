@@ -315,6 +315,33 @@ export class Controller {
     this.store.setLease(appName, actor.session, reason, ttl);
   }
 
+  /** Error results for every targeted process of a switched-off app, or null when on. */
+  private disabledResults(app: AppDef, proc: string | undefined): ProcResult[] | null {
+    if (app.enabled) return null;
+    const error = `app '${app.name}' is switched off — turn it on first (UI toggle, or define_app with enabled: true)`;
+    return this.selectProcesses(app, proc).map((p) => ({ proc: p.name, state: this.pm.getState(app.name, p.name), error }));
+  }
+
+  /** Turn an app on/off. Turning it off stops its running processes (without the
+   * lease check — the switch is authoritative) and cancels pending auto-restarts. */
+  async setEnabled(appName: string, enabled: boolean, actor: ActorCtx): Promise<void> {
+    const app = this.requireApp(appName);
+    if (app.enabled === enabled) return;
+    this.config.setEnabled(appName, enabled);
+    if (!enabled) {
+      await Promise.all(
+        app.processes.map((p) =>
+          this.queue.enqueue(`${appName}/${p.name}`, `stop(switched off) by ${actor.session}`, () => this.pm.stop(appName, p.name))
+        )
+      );
+    }
+    this.store.audit({
+      session: actor.session, source: actor.source, action: enabled ? 'app-on' : 'app-off',
+      app: appName, detail: enabled ? 'switched on' : 'switched off (processes stopped)', result: 'saved',
+    });
+    bus.emit('state');
+  }
+
   async start(
     appName: string,
     proc: string | undefined,
@@ -326,6 +353,8 @@ export class Controller {
     takeover = false
   ): Promise<ConflictInfo | ProcResult[]> {
     const app = this.requireApp(appName);
+    const off = this.disabledResults(app, proc);
+    if (off) return off;
     const conflict = this.checkConflict(appName, actor, force);
     if (conflict) return conflict;
     const procs = this.topoSort(this.selectProcesses(app, proc));
@@ -435,6 +464,8 @@ export class Controller {
     withPrepare = false
   ): Promise<ConflictInfo | ProcResult[]> {
     const app = this.requireApp(appName);
+    const off = this.disabledResults(app, proc);
+    if (off) return off;
     const conflict = this.checkConflict(appName, actor, force);
     if (conflict) return conflict;
     const procs = this.selectProcesses(app, proc);
@@ -526,7 +557,8 @@ export class Controller {
         const [app, proc] = t.split('/');
         return { app, proc: proc || undefined };
       })
-      .filter((t) => this.config.getApp(t.app));
+      // Switched-off apps are simply not part of a profile run.
+      .filter((t) => this.config.getApp(t.app)?.enabled);
   }
 
   fullState() {
@@ -536,6 +568,7 @@ export class Controller {
       apps: this.config.apps.map((app) => ({
         name: app.name,
         description: app.description,
+        enabled: app.enabled,
         cwd: app.cwd,
         env: app.env,
         environments: app.environments,

@@ -75,6 +75,10 @@ Two optional app-level settings fix this:
   session (default and maximum 15). Other sessions get a CONFLICT during that window. Lower
   it for apps many sessions bounce independently (e.g. `5`); `0` disables the automatic lease
   entirely (an explicit `claim_app` still works).
+- `enabled: false` — switch the app off (also the toggle on its card). An off app is
+  never started — manual, profile, boot restore, auto-restart, unhealthy-restart — and
+  is never shown as crashed; switching off stops its running processes. For an app
+  from a shared include file, the switch is written to your `X.local.yaml`.
 
 ## Run
 

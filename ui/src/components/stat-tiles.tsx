@@ -4,14 +4,16 @@ import { cn } from '@/lib/utils'
 import { Activity, AlertTriangle, Boxes, Lock } from 'lucide-react'
 
 export function StatTiles({ apps }: { apps: AppInfo[] }) {
-  const procs = apps.flatMap((a) => a.processes)
+  // Switched-off apps are intentionally down — they don't count toward running/problems.
+  const procs = apps.filter((a) => a.enabled).flatMap((a) => a.processes)
+  const off = apps.length - apps.filter((a) => a.enabled).length
   const running = procs.filter((p) => p.status === 'running').length
   const crashed = procs.filter((p) => p.status === 'crashed').length
   const unhealthy = procs.filter((p) => p.status === 'running' && p.health === 'unhealthy').length
   const leases = apps.filter((a) => a.lease).length
 
   const tiles = [
-    { label: 'Apps', value: apps.length, sub: `${procs.length} processes`, icon: Boxes, tone: '' },
+    { label: 'Apps', value: apps.length, sub: `${procs.length} processes${off > 0 ? ` · ${off} off` : ''}`, icon: Boxes, tone: '' },
     { label: 'Running', value: running, sub: `of ${procs.length} processes`, icon: Activity, tone: 'text-emerald-600 dark:text-emerald-400' },
     {
       label: 'Problems', value: crashed + unhealthy,

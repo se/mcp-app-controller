@@ -90,6 +90,13 @@ async function refreshBaseEnv(): Promise<void> {
 config.onReload = () => {
   void refreshBaseEnv();
   triggerEngine.rebuild();
+  // An app switched off by editing the YAML by hand must not keep running.
+  for (const a of config.apps) {
+    if (a.enabled) continue;
+    for (const p of a.processes) {
+      if (pm.isRunning(a.name, p.name)) void pm.stop(a.name, p.name);
+    }
+  }
 };
 
 const app = createHttpServer(controller);

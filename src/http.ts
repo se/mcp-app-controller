@@ -259,6 +259,17 @@ export function createHttpServer(controller: Controller) {
     }
   });
 
+  api.post('/apps/:app/enabled', async (req, res) => {
+    try {
+      const enabled = req.body?.enabled;
+      if (typeof enabled !== 'boolean') throw new Error('enabled must be a boolean');
+      await controller.setEnabled(req.params.app, enabled, UI_ACTOR);
+      res.json({ ok: true, enabled });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   api.post('/apps/:app/release-lease', (req, res) => {
     const ok = controller.store.releaseLease(req.params.app);
     if (ok) {
@@ -468,6 +479,11 @@ export function createHttpServer(controller: Controller) {
   api.post('/apps', (req, res) => {
     try {
       const { saveTo, ...body } = (req.body ?? {}) as Record<string, unknown>;
+      // The edit form doesn't carry the on/off switch — keep the app's current state.
+      if (body.enabled === undefined && typeof body.name === 'string') {
+        const existing = controller.config.getApp(body.name);
+        if (existing) body.enabled = existing.enabled;
+      }
       const def = AppDefSchema.parse(body);
       if (saveTo === 'source') {
         const file = controller.config.upsertAppInSource(def.name, def);

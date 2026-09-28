@@ -42,6 +42,8 @@ apps:
     staggerMs: 1000                     # optional pause between process starts (ms)
     leaseSeconds: 5                     # how long a start/stop/restart holds the app for
                                         # the acting session (default/max 15; 0 = no lease)
+    enabled: true                       # false = switched off: never started/auto-restarted,
+                                        # never shown as crashed
     processes:
       - name: api
         command: dotnet run --project src/Api/

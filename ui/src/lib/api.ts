@@ -42,6 +42,8 @@ export interface Lease {
 export interface AppInfo {
   name: string
   description: string
+  /** Off switch: a disabled app is never started and never shown as crashed */
+  enabled: boolean
   cwd: string
   env: Record<string, string>
   environments: Record<string, Record<string, string>>
@@ -290,6 +292,13 @@ export const revealInFinder = (app: string, proc?: string) =>
   api<{ ok: true; dir: string }>(`/apps/${encodeURIComponent(app)}/reveal`, {
     method: 'POST',
     body: JSON.stringify({ process: proc }),
+  })
+
+/** Turn an app on/off. Off also stops its running processes. */
+export const setAppEnabled = (app: string, enabled: boolean) =>
+  api<{ ok: true; enabled: boolean }>(`/apps/${encodeURIComponent(app)}/enabled`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
   })
 
 export const releaseLease = (app: string) =>

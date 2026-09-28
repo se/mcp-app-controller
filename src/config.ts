@@ -41,6 +41,9 @@ export const AppDefSchema = z
   .object({
     name: z.string().min(1),
     description: z.string().default(''),
+    // Off switch. A disabled app is never started (manual, profile, boot restore,
+    // auto-restart, unhealthy-restart) and its past exits are not reported as crashes.
+    enabled: z.boolean().default(true),
     cwd: z.string().min(1),
     // App-wide env vars, applied to every process (process env overrides these)
     env: z.record(z.string()).default({}),
@@ -604,6 +607,7 @@ export class ConfigStore {
   private pruneDefaults(def: AppDef): Raw {
     const out: Raw = { name: def.name, cwd: def.cwd };
     if (def.description) out.description = def.description;
+    if (!def.enabled) out.enabled = false;
     if (Object.keys(def.env).length > 0) out.env = def.env;
     if (Object.keys(def.environments).length > 0) out.environments = def.environments;
     if (def.activeEnvironment) out.activeEnvironment = def.activeEnvironment;
@@ -668,6 +672,43 @@ export class ConfigStore {
     }
     bus.emit('state');
     return file;
+  }
+
+  /** Turn an app on/off. For an include-provided app the switch is a per-developer
+   * choice, so it goes into X.local.yaml (no fork, shared file untouched); apps owned
+   * by apps.yaml are updated in place. */
+  setEnabled(name: string, enabled: boolean): void {
+    const info = this.sourceOf(name) !== undefined ? this.includedRaw.get(name) : undefined;
+    if (!info) {
+      const own = this.mainApps.find((a) => a.name === name);
+      if (!own) throw new Error(`Unknown app '${name}'`);
+      own.enabled = enabled;
+      this.save();
+      return;
+    }
+    this.saving = true;
+    try {
+      let localRaw: Raw = {};
+      if (fs.existsSync(info.localFile)) {
+        try { localRaw = (YAML.parse(fs.readFileSync(info.localFile, 'utf8')) as Raw) ?? {}; } catch { localRaw = {}; }
+      }
+      const localAppsArr: Raw[] = Array.isArray(localRaw.apps) ? (localRaw.apps as Raw[]) : [];
+      let entry = localAppsArr.find((a) => a?.name === name);
+      if (!entry) {
+        entry = { name };
+        localAppsArr.push(entry);
+      }
+      // Only record a deviation from the shared file's own value.
+      const sharedEnabled = info.shared?.enabled !== false;
+      if (enabled === sharedEnabled) delete entry.enabled; else entry.enabled = enabled;
+      localRaw.apps = Object.keys(entry).length > 1 ? localAppsArr : localAppsArr.filter((a) => a !== entry);
+      fs.writeFileSync(info.localFile, YAML.stringify(localRaw));
+      this.load();
+      this.lastFingerprint = this.fingerprint();
+    } finally {
+      setTimeout(() => (this.saving = false), 1000);
+    }
+    bus.emit('state');
   }
 
   removeApp(name: string): boolean {
