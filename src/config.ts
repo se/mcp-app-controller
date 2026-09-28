@@ -77,8 +77,9 @@ export const AppDefSchema = z
     staggerMs: z.number().int().min(0).default(0),
     // How long a start/stop/restart holds the app for the acting session (seconds).
     // Other sessions get a CONFLICT during that window. 0 disables the automatic
-    // lease (explicit claim_app still works). Default and maximum 15s.
-    leaseSeconds: z.number().int().min(0).max(15).default(15),
+    // lease (explicit claim_app still works). Default and maximum 15s — larger values
+    // (from configs written before the cap) are clamped rather than rejected.
+    leaseSeconds: z.number().int().min(0).transform((s) => Math.min(s, 15)).default(15),
     processes: z.array(ProcessDefSchema).min(1),
   })
   .superRefine((app, ctx) => {
