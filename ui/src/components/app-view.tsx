@@ -368,7 +368,7 @@ export function AppView({
             <TableRow className="hover:bg-transparent">
               <TableHead>Process</TableHead>
               <TableHead className="w-24">Status</TableHead>
-              <TableHead className="w-28">Code</TableHead>
+              <TableHead className="w-32">Code</TableHead>
               <TableHead className="w-20">PID</TableHead>
               <TableHead className="w-20">Uptime</TableHead>
               <TableHead className="w-20">Ready in</TableHead>

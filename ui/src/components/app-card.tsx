@@ -88,7 +88,7 @@ function PrepareTail({ app, fallback }: { app: string; fallback: string | null }
 type Op = { proc: string; kind: 'start' | 'stop' | 'restart' | 'clean' | 'delete' | 'release'; blocking: boolean }
 
 // dot | process | pid | uptime | ready | cpu | memory | command (flex) | actions
-const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 6.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
+const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 7.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
 
 function StatusDot({ p }: { p: ProcInfo }) {
   const { status, health } = p
@@ -375,9 +375,11 @@ function AppCardInner({
       {!collapsed && (
       <CardContent className="px-0 pb-0">
         {/* Column header — the per-row labels (pid, up, ready, cpu...) live here now.
-            Inline gridTemplateColumns: numeric cols stay tight, Command absorbs the rest. */}
+            ONE grid for header + rows (rows are subgrids), so auto-sized columns (name,
+            actions) resolve to the same width everywhere — separate per-row grids drifted. */}
         <Separator />
-        <div className="grid items-center gap-x-3 px-5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+        <div className="grid gap-x-3 px-5" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+        <div className="col-span-full grid grid-cols-subgrid items-center py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           <span />
           <span>Process</span>
           <span>Code</span>
@@ -390,9 +392,9 @@ function AppCardInner({
           <span className="text-right">Actions</span>
         </div>
         {app.processes.map((p) => (
-          <div key={p.name}>
-            <Separator />
-            <div className="group/proc grid items-center gap-x-3 px-5 py-2" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+          <div key={p.name} className="col-span-full grid grid-cols-subgrid">
+            <Separator className="col-span-full -mx-5 !w-auto" />
+            <div className="group/proc col-span-full grid grid-cols-subgrid items-center py-2">
               <StatusDot p={p} />
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate text-sm font-medium">{p.name}</span>
@@ -491,6 +493,7 @@ function AppCardInner({
             </div>
           </div>
         ))}
+        </div>
       </CardContent>
       )}
 
