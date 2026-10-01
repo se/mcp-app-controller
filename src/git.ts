@@ -25,6 +25,9 @@ export interface GitInfo {
   /** Uncommitted files (relative to the repo root) edited, added, deleted or reverted since the spawn */
   changedFiles: number;
   changedSample: string[];
+  /** Uncommitted files already present at spawn — the process runs code that isn't any commit */
+  dirtyAtStart: number;
+  dirtySample: string[];
 }
 
 interface StartRecord {
@@ -141,6 +144,7 @@ export class GitMonitor {
     return {
       startCommit: rec.commit, headCommit: repo.commit, branch: repo.branch, ...counts,
       changedFiles: changed.length, changedSample: changed.slice(0, CHANGED_SAMPLE),
+      dirtyAtStart: Object.keys(rec.dirty).length, dirtySample: Object.keys(rec.dirty).sort().slice(0, CHANGED_SAMPLE),
     };
   }
 

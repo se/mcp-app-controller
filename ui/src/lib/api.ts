@@ -35,6 +35,9 @@ export interface ProcInfo {
     /** Uncommitted files changed since the process started (paths relative to repo root) */
     changedFiles: number
     changedSample: string[]
+    /** Uncommitted files already there at start — running code isn't exactly any commit */
+    dirtyAtStart: number
+    dirtySample: string[]
   } | null
   status: 'running' | 'stopped' | 'crashed'
   pid?: number
