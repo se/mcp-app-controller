@@ -405,7 +405,7 @@ function AppCardInner({
                 {p.status === 'running' && p.mode === 'dev' && (
                   <Badge variant="outline" className="h-4 border-sky-500/40 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400">dev</Badge>
                 )}
-                <GitBadge p={p} />
+                <GitBadge p={p} className="ml-auto" />
               </span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">

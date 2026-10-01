@@ -391,7 +391,7 @@ export function AppView({
                     >
                       <FolderOpen className="size-3" />
                     </button>
-                    <GitBadge p={p} />
+                    <GitBadge p={p} className="ml-auto" />
                   </div>
                   <div className="max-w-72 truncate font-mono text-[11px] text-muted-foreground"
                     title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}>

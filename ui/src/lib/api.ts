@@ -32,6 +32,9 @@ export interface ProcInfo {
     /** -1 = start commit no longer resolvable (count unknown) */
     behind: number
     ahead: number
+    /** Uncommitted files changed since the process started (paths relative to repo root) */
+    changedFiles: number
+    changedSample: string[]
   } | null
   status: 'running' | 'stopped' | 'crashed'
   pid?: number
