@@ -416,6 +416,7 @@ function Dashboard() {
         open={formOpen}
         onOpenChange={setFormOpen}
         editApp={editApp}
+        appNames={apps.map((a) => a.name)}
         onSaved={refresh}
       />
       <EnvModal open={envOpen} onOpenChange={setEnvOpen} />

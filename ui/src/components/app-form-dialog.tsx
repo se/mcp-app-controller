@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,9 +19,17 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { saveApp, type AppDefInput, type AppInfo } from '@/lib/api'
-import { Plus, X } from 'lucide-react'
+import { ClipboardPaste, Copy, Download, FileUp, Plus, Share2, Upload, X } from 'lucide-react'
 
 interface ProcForm {
   name: string
@@ -44,6 +53,33 @@ const emptyProc: ProcForm = {
   ownLogTimestamps: false, ports: '', dependsOn: '',
 }
 
+/** Envelope for shared app configs, so an import can tell them apart from random JSON. */
+const SHARE_KIND = 'app-controller/app'
+
+type EnvExtras = Pick<AppDefInput, 'env' | 'environments' | 'activeEnvironment'>
+
+/** Accepts the share envelope or a bare app definition; throws on anything else. */
+function parseShared(text: string): AppDefInput {
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    throw new Error('Not valid JSON')
+  }
+  const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  const app = (obj.kind === SHARE_KIND ? obj.app : obj) as AppDefInput | undefined
+  if (!app || typeof app !== 'object' || typeof app.name !== 'string' || !Array.isArray(app.processes)) {
+    throw new Error('Not an app config — expected { name, processes: [...] }')
+  }
+  return app
+}
+
+/** Strip env values (may hold secrets) from a definition before sharing it. */
+function withoutEnv(def: AppDefInput): AppDefInput {
+  const { env: _env, environments: _envs, activeEnvironment: _active, ...rest } = def
+  return { ...rest, processes: def.processes.map((p) => ({ ...p, env: {} })) }
+}
+
 const toRestartForm = (v: boolean | 'always'): ProcForm['autoRestart'] =>
   v === 'always' ? 'always' : v ? 'limited' : 'off'
 const fromRestartForm = (v: ProcForm['autoRestart']): boolean | 'always' =>
@@ -62,11 +98,14 @@ export function AppFormDialog({
   open,
   onOpenChange,
   editApp,
+  appNames = [],
   onSaved,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   editApp: AppInfo | null
+  /** Existing app names — a new/imported app must not silently overwrite one. */
+  appNames?: string[]
   onSaved: () => void
 }) {
   const [name, setName] = useState('')
@@ -80,10 +119,15 @@ export function AppFormDialog({
   const [procs, setProcs] = useState<ProcForm[]>([{ ...emptyProc }])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  // Env carried by an imported config (the form has no env editor for new apps)
+  const [importedEnv, setImportedEnv] = useState<EnvExtras>({})
+  const [shareEnv, setShareEnv] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
     setError('')
+    setImportedEnv({})
     if (editApp) {
       setName(editApp.name)
       setDescription(editApp.description)
@@ -118,18 +162,75 @@ export function AppFormDialog({
       setPrepareOrder('after-stop')
       setClean('')
       setStaggerMs('')
+      setLeaseSeconds('')
       setProcs([{ ...emptyProc }])
     }
   }, [open, editApp])
+
+  const loadDef = (def: AppDefInput) => {
+    setName(def.name ?? '')
+    setDescription(def.description ?? '')
+    setCwd(def.cwd ?? '')
+    setPrepare(def.prepare ?? '')
+    setPrepareOrder(def.prepareOrder ?? 'after-stop')
+    setClean(def.clean ?? '')
+    setStaggerMs(def.staggerMs ? String(def.staggerMs) : '')
+    setLeaseSeconds(def.leaseSeconds != null && def.leaseSeconds !== 15 ? String(def.leaseSeconds) : '')
+    setImportedEnv({ env: def.env, environments: def.environments, activeEnvironment: def.activeEnvironment })
+    setProcs(
+      def.processes.length
+        ? def.processes.map((p) => ({
+            name: p.name ?? '',
+            command: p.command ?? '',
+            devCommand: p.devCommand ?? '',
+            cwd: p.cwd ?? '',
+            env: p.env ?? {},
+            autoRestart: toRestartForm(p.autoRestart ?? false),
+            healthUrl: p.healthUrl ?? '',
+            healthPort: p.healthPort != null ? String(p.healthPort) : '',
+            healthCommand: p.healthCommand ?? '',
+            restartOnUnhealthy: p.restartOnUnhealthy != null ? String(p.restartOnUnhealthy) : '',
+            ownLogTimestamps: p.ownLogTimestamps ?? false,
+            ports: (p.ports ?? []).join(', '),
+            dependsOn: (p.dependsOn ?? []).join(', '),
+          }))
+        : [{ ...emptyProc }]
+    )
+  }
+
+  const importText = (text: string) => {
+    try {
+      const def = parseShared(text)
+      loadDef(def)
+      setError('')
+      toast.success(`Imported '${def.name}' — check the working directory, then save`)
+    } catch (err) {
+      setError(`Import failed: ${(err as Error).message}`)
+    }
+  }
+
+  const importFromClipboard = async () => {
+    let text: string | null = null
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      // Clipboard read blocked (permissions / non-secure context) — fall back to a prompt
+      text = prompt('Paste the shared app config JSON:')
+    }
+    if (text) importText(text)
+  }
+
+  const importFromFile = async (file: File | undefined) => {
+    if (file) importText(await file.text())
+    if (fileRef.current) fileRef.current.value = ''
+  }
 
   const updateProc = (i: number, patch: Partial<ProcForm>) => {
     setProcs((prev) => prev.map((p, j) => (j === i ? { ...p, ...patch } : p)))
   }
 
-  const submit = async (saveTo?: 'source') => {
-    setSaving(true)
-    setError('')
-    const def: AppDefInput = {
+  /** The definition as currently entered in the form. */
+  const buildDef = (): AppDefInput => ({
       name: name.trim(),
       description: description.trim(),
       cwd: cwd.trim(),
@@ -140,7 +241,11 @@ export function AppFormDialog({
             environments: editApp.environments,
             ...(editApp.activeEnvironment ? { activeEnvironment: editApp.activeEnvironment } : {}),
           }
-        : {}),
+        : {
+            ...(importedEnv.env ? { env: importedEnv.env } : {}),
+            ...(importedEnv.environments ? { environments: importedEnv.environments } : {}),
+            ...(importedEnv.activeEnvironment ? { activeEnvironment: importedEnv.activeEnvironment } : {}),
+          }),
       ...(prepare.trim() ? { prepare: prepare.trim(), prepareOrder } : {}),
       ...(clean.trim() ? { clean: clean.trim() } : {}),
       ...(Number(staggerMs) > 0 ? { staggerMs: Number(staggerMs) } : {}),
@@ -163,7 +268,39 @@ export function AppFormDialog({
           .filter((n) => Number.isInteger(n) && n > 0),
         dependsOn: p.dependsOn.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
       })),
+  })
+
+  const shareJson = () => {
+    const def = buildDef()
+    return JSON.stringify({ kind: SHARE_KIND, version: 1, app: shareEnv ? def : withoutEnv(def) }, null, 2)
+  }
+
+  const copyShare = async () => {
+    try {
+      await navigator.clipboard.writeText(shareJson())
+      toast.success(`Copied '${name}' config to clipboard${shareEnv ? ' (with env values)' : ''}`)
+    } catch (err) {
+      toast.error(`Copy failed: ${(err as Error).message}`)
     }
+  }
+
+  const downloadShare = () => {
+    const url = URL.createObjectURL(new Blob([shareJson()], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${name || 'app'}.app.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const submit = async (saveTo?: 'source') => {
+    setError('')
+    const def = buildDef()
+    if (!editApp && appNames.includes(def.name)) {
+      setError(`An app named '${def.name}' already exists — rename it before saving.`)
+      return
+    }
+    setSaving(true)
     try {
       await saveApp(def, saveTo)
       onOpenChange(false)
@@ -179,7 +316,49 @@ export function AppFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] grid-cols-[minmax(0,1fr)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editApp ? `App config — ${editApp.name}` : 'New app config'}</DialogTitle>
+          <div className="flex items-center justify-between gap-3 pr-8">
+            <DialogTitle>{editApp ? `App config — ${editApp.name}` : 'New app config'}</DialogTitle>
+            {editApp ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 text-xs" title="Export this config as JSON for a teammate to import">
+                    <Share2 className="size-3.5" /> Share
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuItem onSelect={() => void copyShare()}>
+                    <Copy /> Copy JSON to clipboard
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={downloadShare}>
+                    <Download /> Download .json file
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem checked={shareEnv} onCheckedChange={(v) => setShareEnv(v === true)}
+                    onSelect={(e) => e.preventDefault()} className="text-xs">
+                    Include env values (may contain secrets)
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 text-xs" title="Fill this form from a config a teammate shared">
+                    <Upload className="size-3.5" /> Import
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem onSelect={() => void importFromClipboard()}>
+                    <ClipboardPaste /> Paste from clipboard
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
+                    <FileUp /> Choose .json file…
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
+              onChange={(e) => void importFromFile(e.target.files?.[0])} />
+          </div>
         </DialogHeader>
 
         <div className="grid gap-4">
