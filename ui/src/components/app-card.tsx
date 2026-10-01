@@ -88,7 +88,7 @@ function PrepareTail({ app, fallback }: { app: string; fallback: string | null }
 type Op = { proc: string; kind: 'start' | 'stop' | 'restart' | 'clean' | 'delete' | 'release'; blocking: boolean }
 
 // dot | process | pid | uptime | ready | cpu | memory | command (flex) | actions
-const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
+const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 6.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
 
 function StatusDot({ p }: { p: ProcInfo }) {
   const { status, health } = p
@@ -380,6 +380,7 @@ function AppCardInner({
         <div className="grid items-center gap-x-3 px-5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
           <span />
           <span>Process</span>
+          <span>Code</span>
           <span className="text-right">PID</span>
           <span className="text-right">Uptime</span>
           <span className="text-right">Ready in</span>
@@ -405,8 +406,8 @@ function AppCardInner({
                 {p.status === 'running' && p.mode === 'dev' && (
                   <Badge variant="outline" className="h-4 border-sky-500/40 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400">dev</Badge>
                 )}
-                <GitBadge p={p} className="ml-auto" />
               </span>
+              <span className="min-w-0"><GitBadge p={p} /></span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
                 {p.status === 'running' ? <Uptime startedAt={p.startedAt!} /> : '—'}

@@ -368,6 +368,7 @@ export function AppView({
             <TableRow className="hover:bg-transparent">
               <TableHead>Process</TableHead>
               <TableHead className="w-24">Status</TableHead>
+              <TableHead className="w-28">Code</TableHead>
               <TableHead className="w-20">PID</TableHead>
               <TableHead className="w-20">Uptime</TableHead>
               <TableHead className="w-20">Ready in</TableHead>
@@ -391,7 +392,6 @@ export function AppView({
                     >
                       <FolderOpen className="size-3" />
                     </button>
-                    <GitBadge p={p} className="ml-auto" />
                   </div>
                   <div className="max-w-72 truncate font-mono text-[11px] text-muted-foreground"
                     title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}>
@@ -403,6 +403,7 @@ export function AppView({
                   </div>
                 </TableCell>
                 <TableCell>{statusBadge(p)}</TableCell>
+                <TableCell><GitBadge p={p} /></TableCell>
                 <TableCell className="font-mono text-xs">{p.pid ?? '—'}</TableCell>
                 <TableCell className="text-xs">{p.status === 'running' ? <Uptime startedAt={p.startedAt!} /> : '—'}</TableCell>
                 <TableCell className="text-xs tabular-nums">
