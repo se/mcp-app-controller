@@ -117,6 +117,8 @@ export class ProcessManager {
    * the definition they were spawned with; auto-restart must not reuse it — otherwise an
    * apps.yaml edit (new command, new policy) only takes effect after a manual restart. */
   resolveDefs?: (app: string, proc: string) => { appDef: AppDef; procDef: ProcessDef } | null;
+  /** Fired after every successful spawn (wired to the git monitor to record the start commit). */
+  onSpawn?: (app: string, proc: string, pid: number, cwd: string) => Promise<void>;
 
   constructor(private logsDir: string, private store: Store) {}
 
@@ -403,6 +405,7 @@ export class ProcessManager {
     this.runtime.set(key, entry);
     this.stopped.delete(key);
     this.store.setRunning(appDef.name, procDef.name, mode, child.pid);
+    if (entry.pid > 0) void this.onSpawn?.(appDef.name, procDef.name, entry.pid, cwd);
 
     child.on('error', (err) => {
       this.appendLog(key, `--- [controller] spawn error: ${err.message}`);

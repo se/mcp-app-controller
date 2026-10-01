@@ -29,6 +29,7 @@ import { RestartSplitButton } from '@/components/restart-split-button'
 import { cn } from '@/lib/utils'
 import { EnvCard } from '@/components/env-editor'
 import { Elapsed, Uptime } from '@/components/uptime'
+import { GitBadge } from '@/components/git-badge'
 import { Activity, ArrowLeft, Cpu, FileText, FolderOpen, Hammer, Lock, MemoryStick, Pencil, Play, Square, Wrench } from 'lucide-react'
 
 function Sparkline({ values, className }: { values: number[]; className?: string }) {
@@ -390,6 +391,7 @@ export function AppView({
                     >
                       <FolderOpen className="size-3" />
                     </button>
+                    <GitBadge p={p} />
                   </div>
                   <div className="max-w-72 truncate font-mono text-[11px] text-muted-foreground"
                     title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}>

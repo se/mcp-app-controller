@@ -24,6 +24,15 @@ export interface ProcInfo {
   /** ms from spawn to first healthy for the current run; null until first healthy */
   readyInMs: number | null
   metrics: ProcMetrics | null
+  /** Running code vs. the repo's HEAD; null when not running / not a git repo */
+  git: {
+    startCommit: string
+    headCommit: string
+    branch: string | null
+    /** -1 = start commit no longer resolvable (count unknown) */
+    behind: number
+    ahead: number
+  } | null
   status: 'running' | 'stopped' | 'crashed'
   pid?: number
   mode?: 'start' | 'dev'

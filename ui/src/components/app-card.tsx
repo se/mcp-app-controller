@@ -8,6 +8,7 @@ import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { appAction, appActionWithTakeover, cleanApp, deleteApp, fmtElapsed, fmtLeft, getLogs, isStarting, releaseLease, revealInFinder, type AppInfo, type ProcInfo } from '@/lib/api'
 import { Elapsed, Uptime } from '@/components/uptime'
+import { GitBadge } from '@/components/git-badge'
 import { logBus } from '@/lib/log-bus'
 import { ChevronDown, ChevronRight, Eraser, FileText, FolderOpen, Lock, Pencil, Pin, Play, Square, Timer, Trash2, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -404,6 +405,7 @@ function AppCardInner({
                 {p.status === 'running' && p.mode === 'dev' && (
                   <Badge variant="outline" className="h-4 border-sky-500/40 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400">dev</Badge>
                 )}
+                <GitBadge p={p} />
               </span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
               <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">

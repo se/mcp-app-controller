@@ -3,6 +3,7 @@ import type { Store, Lease } from './db.js';
 import type { ProcessManager, Mode, ProcState } from './process-manager.js';
 import { hasHealthCheck, type HealthMonitor } from './health.js';
 import type { MetricsMonitor } from './metrics.js';
+import type { GitMonitor } from './git.js';
 import { KeyedQueue } from './queue.js';
 import { bus } from './events.js';
 
@@ -44,6 +45,7 @@ export interface ProcResult {
 export class Controller {
   public health?: HealthMonitor;
   public metrics?: MetricsMonitor;
+  public git?: GitMonitor;
   /** Daemon build info (git commit, dist build time, boot time) — shown in the UI. */
   public versionInfo?: { commit: string; builtAt: number | null; startedAt: number };
   private queue = new KeyedQueue();
@@ -600,6 +602,7 @@ export class Controller {
           health: this.health?.getHealth(app.name, p.name) ?? null,
           readyInMs: this.health?.getReadyMs(app.name, p.name) ?? null,
           metrics: this.metrics?.latest.get(`${app.name}/${p.name}`) ?? null,
+          git: this.git?.get(app.name, p.name) ?? null,
           ...this.pm.getState(app.name, p.name),
         })),
       })),

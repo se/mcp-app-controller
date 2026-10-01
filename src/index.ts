@@ -9,6 +9,7 @@ import { ProcessManager } from './process-manager.js';
 import { Controller } from './controller.js';
 import { HealthMonitor } from './health.js';
 import { MetricsMonitor } from './metrics.js';
+import { GitMonitor } from './git.js';
 import { captureShellEnv, defaultShell } from './env.js';
 import { startNotifier } from './notify.js';
 import { TriggerEngine } from './triggers.js';
@@ -69,6 +70,12 @@ controller.metrics = metrics;
 metrics.hydrate(store.getKv('metrics_history'));
 metrics.start();
 setInterval(() => store.setKv('metrics_history', metrics.serialize()), 60_000);
+// Start commits must be hydrated before restore adopts survivors (keyed by pid)
+const git = new GitMonitor(config, pm);
+controller.git = git;
+git.hydrate(store.getKv('git_starts'));
+pm.onSpawn = (app, proc, pid, cwd) => git.recordStart(app, proc, pid, cwd);
+setInterval(() => store.setKv('git_starts', git.serialize()), 30_000);
 startNotifier(config);
 const triggerEngine = new TriggerEngine(config, store);
 triggerEngine.start();
@@ -108,6 +115,7 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   setTimeout(async () => {
     await refreshBaseEnv(); // env must be ready before restored processes spawn
     if (process.env.APPCTRL_NO_RESTORE !== '1') await restoreOnBoot(controller);
+    git.start(); // only after restore — its first tick drops records of processes that aren't running
   }, 500);
 });
 
@@ -116,6 +124,7 @@ async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   store.setKv('metrics_history', metrics.serialize());
+  store.setKv('git_starts', git.serialize());
   // Default: leave managed processes RUNNING — they log to their own file fds, so
   // they don't depend on the daemon, and the next daemon adopts them on boot.
   // Set APPCTRL_STOP_ON_EXIT=1 to restore the old stop-everything behavior.
