@@ -131,3 +131,29 @@
 /* Note: the ::highlight(log-match) rules for the log-search Custom Highlight API are
    injected at runtime in main.tsx — lightningcss doesn't know the pseudo-element yet
    and warned on every build when they lived here. */
+
+/* App-card process table: header + rows share one grid (rows are subgrids). The card
+   content is the size container; as it narrows, low-value columns drop out and the
+   action buttons go icon-only instead of overflowing the card.
+   Columns: dot | process | code | pid | uptime | ready | cpu | memory | command | actions
+   Breakpoints were measured: no overflow from ~390px up (icon-only actions below 64rem). */
+.proc-wrap { container-type: inline-size; }
+.proc-grid {
+  grid-template-columns: 14px minmax(6rem, 10rem) 7.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(6rem, 1fr) max-content;
+}
+@container (max-width: 64rem) {
+  .proc-grid { grid-template-columns: 14px minmax(6rem, 1fr) 7.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem max-content; }
+  .proc-col-command, .proc-btn-label { display: none; }
+}
+@container (max-width: 49rem) {
+  .proc-grid { grid-template-columns: 14px minmax(5rem, 1fr) 7.5rem 3.25rem 3.25rem 4.25rem max-content; }
+  .proc-col-uptime, .proc-col-ready { display: none; }
+}
+@container (max-width: 39rem) {
+  .proc-grid { grid-template-columns: 14px minmax(4rem, 1fr) 7.5rem 4.25rem max-content; }
+  .proc-col-pid, .proc-col-cpu { display: none; }
+}
+@container (max-width: 30rem) {
+  .proc-grid { grid-template-columns: 14px minmax(4rem, 1fr) 7.5rem max-content; }
+  .proc-col-mem { display: none; }
+}

@@ -87,8 +87,6 @@ function PrepareTail({ app, fallback }: { app: string; fallback: string | null }
  */
 type Op = { proc: string; kind: 'start' | 'stop' | 'restart' | 'clean' | 'delete' | 'release'; blocking: boolean }
 
-// dot | process | pid | uptime | ready | cpu | memory | command (flex) | actions
-const PROC_GRID_COLS = '14px minmax(6rem, 10rem) 7.5rem 3.25rem 3.5rem 4.25rem 3.25rem 4.25rem minmax(10rem, 1fr) max-content'
 
 function StatusDot({ p }: { p: ProcInfo }) {
   const { status, health } = p
@@ -170,8 +168,9 @@ function AppCardInner({
 
   return (
     <Card className={cn('group gap-0 overflow-hidden py-0', !app.enabled && 'opacity-60')}>
-      <CardHeader className="flex flex-row items-center justify-between gap-4 px-5 py-3.5">
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Wraps the action buttons under the name when the card is narrow — never squeeze the name away */}
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3.5">
+        <div className="flex min-w-48 flex-1 items-center gap-2">
           <button
             onClick={onToggleCollapse}
             title={collapsed ? 'Expand' : 'Collapse'}
@@ -373,22 +372,23 @@ function AppCardInner({
 
 
       {!collapsed && (
-      <CardContent className="px-0 pb-0">
+      <CardContent className="proc-wrap px-0 pb-0">
         {/* Column header — the per-row labels (pid, up, ready, cpu...) live here now.
             ONE grid for header + rows (rows are subgrids), so auto-sized columns (name,
             actions) resolve to the same width everywhere — separate per-row grids drifted. */}
         <Separator />
-        <div className="grid gap-x-3 px-5" style={{ gridTemplateColumns: PROC_GRID_COLS }}>
+        {/* Column template + responsive column hiding: .proc-grid in index.css */}
+        <div className="proc-grid grid gap-x-3 px-5">
         <div className="col-span-full grid grid-cols-subgrid items-center py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           <span />
           <span>Process</span>
           <span>Code</span>
-          <span className="text-right">PID</span>
-          <span className="text-right">Uptime</span>
-          <span className="text-right">Ready in</span>
-          <span className="text-right">CPU</span>
-          <span className="text-right">Memory</span>
-          <span>Command</span>
+          <span className="proc-col-pid text-right">PID</span>
+          <span className="proc-col-uptime text-right">Uptime</span>
+          <span className="proc-col-ready text-right">Ready in</span>
+          <span className="proc-col-cpu text-right">CPU</span>
+          <span className="proc-col-mem text-right">Memory</span>
+          <span className="proc-col-command">Command</span>
           <span className="text-right">Actions</span>
         </div>
         {app.processes.map((p) => (
@@ -410,11 +410,11 @@ function AppCardInner({
                 )}
               </span>
               <span className="min-w-0"><GitBadge p={p} /></span>
-              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
-              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="proc-col-pid text-right font-mono text-[11px] tabular-nums text-muted-foreground">{p.pid ?? '—'}</span>
+              <span className="proc-col-uptime text-right font-mono text-[11px] tabular-nums text-muted-foreground">
                 {p.status === 'running' ? <Uptime startedAt={p.startedAt!} /> : '—'}
               </span>
-              <span className="text-right font-mono text-[11px] tabular-nums">
+              <span className="proc-col-ready text-right font-mono text-[11px] tabular-nums">
                 {isStarting(p) ? (
                   <span className="animate-pulse text-sky-600 dark:text-sky-400"><Elapsed since={p.startedAt!} />…</span>
                 ) : p.readyInMs !== null ? (
@@ -423,14 +423,14 @@ function AppCardInner({
                   <span className="text-muted-foreground" title="no health check configured (healthUrl / healthPort)">—</span>
                 )}
               </span>
-              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="proc-col-cpu text-right font-mono text-[11px] tabular-nums text-muted-foreground">
                 {p.metrics && p.status === 'running' ? `${p.metrics.cpu}%` : '—'}
               </span>
-              <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="proc-col-mem text-right font-mono text-[11px] tabular-nums text-muted-foreground">
                 {p.metrics && p.status === 'running' ? `${p.metrics.memMb} MB` : '—'}
               </span>
               <span
-                className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+                className="proc-col-command min-w-0 truncate font-mono text-[11px] text-muted-foreground"
                 title={p.status === 'crashed' && p.lastExit?.summary ? p.lastExit.summary : p.command}
               >
                 {p.status === 'crashed' ? (
@@ -451,7 +451,7 @@ function AppCardInner({
                       title={blocked
                         ? 'An app-wide build/action is in progress'
                         : `Restart ${p.name} — keeps its current mode.`}
-                      label={isRestarting(p.name) ? 'restarting…' : 'restart'}
+                      label={<span className="proc-btn-label">{isRestarting(p.name) ? 'restarting…' : 'restart'}</span>}
                       onRestart={(withPrepare) =>
                         // With prepare this builds the whole app, so it blocks the other
                         // rows; a plain restart only occupies this process's own row.
@@ -465,29 +465,29 @@ function AppCardInner({
                         })
                       }
                     />
-                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={procBusy(p.name)}
+                    <Button variant="outline" size="sm" className="h-7 px-2 text-xs hover:border-red-500/60 hover:text-red-400" disabled={procBusy(p.name)} title={`Stop ${p.name}`}
                       onClick={() => run({ proc: p.name, kind: 'stop', blocking: false }, () => appActionWithTakeover(app.name, 'stop', { process: p.name, reason: 'manual stop from UI' }))}>
-                      <Square className="size-3" /> stop
+                      <Square className="size-3" /><span className="proc-btn-label">stop</span>
                     </Button>
                   </>
                 ) : (
                   <>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={procBusy(p.name) || !app.enabled}
-                      title={app.enabled ? undefined : 'App is switched off'}
+                      title={app.enabled ? `Start ${p.name}` : 'App is switched off'}
                       onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'start', reason: 'manual start from UI' }))}>
-                      <Play className="size-3" /> start
+                      <Play className="size-3" /><span className="proc-btn-label">start</span>
                     </Button>
                     {p.devCommand && (
                       <Button variant="outline" size="sm" className="h-7 px-2 text-xs text-sky-600 dark:text-sky-400" disabled={procBusy(p.name) || !app.enabled}
-                        title={app.enabled ? undefined : 'App is switched off'}
+                        title={app.enabled ? `Start ${p.name} in dev mode` : 'App is switched off'}
                         onClick={() => run({ proc: p.name, kind: 'start', blocking: false }, () => appActionWithTakeover(app.name, 'start', { process: p.name, mode: 'dev', reason: 'manual dev start from UI' }))}>
-                        <Wrench className="size-3" /> dev
+                        <Wrench className="size-3" /><span className="proc-btn-label">dev</span>
                       </Button>
                     )}
                   </>
                 )}
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onLogs(p.name)}>
-                  <FileText className="size-3" /> logs
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" title={`Logs of ${p.name}`} onClick={() => onLogs(p.name)}>
+                  <FileText className="size-3" /><span className="proc-btn-label">logs</span>
                 </Button>
               </div>
             </div>

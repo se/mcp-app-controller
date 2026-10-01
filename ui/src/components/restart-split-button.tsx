@@ -48,7 +48,7 @@ export function RestartSplitButton({
         className={cn(sizing, className, prepare && 'rounded-r-none border-r-0')}
         onClick={() => onRestart(false)}
       >
-        <RotateCw className={compact ? 'size-3' : 'size-3.5'} /> {label}
+        <RotateCw className={compact ? 'size-3' : 'size-3.5'} />{label}
       </Button>
       {prepare && (
         <DropdownMenu>
