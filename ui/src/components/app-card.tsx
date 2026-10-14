@@ -178,23 +178,27 @@ function AppCardInner({
           >
             {collapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
           </button>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2.5">
+          <div className="min-w-0 flex-1">
+            {/* The name keeps its full width (capped so a huge name can't push everything out);
+                the description is the part that yields and truncates when space runs out. */}
+            <div className="flex min-w-0 items-baseline gap-2.5">
               <button
                 onClick={onOpen}
-                title="Open app view"
-                className="truncate text-[15px] font-semibold tracking-tight hover:underline"
+                title={`Open app view — ${app.name}`}
+                className="max-w-[70%] shrink-0 truncate text-[15px] font-semibold tracking-tight hover:underline"
               >
                 {app.name}
               </button>
               {app.description && (
-                <span className="truncate text-xs font-medium text-muted-foreground/80">{app.description}</span>
+                <span className="min-w-0 truncate text-xs text-muted-foreground" title={app.description}>
+                  {app.description}
+                </span>
               )}
               {app.source && (
                 <Badge
                   variant="outline"
                   title={`Definition comes from a shared config file:\n${app.source}\n\nEditing it here forks a personal copy into your apps.yaml.`}
-                  className="h-4 shrink-0 border-violet-500/40 px-1.5 text-[9px] font-medium uppercase tracking-wide text-violet-600 dark:text-violet-400"
+                  className="h-4 shrink-0 self-center border-violet-500/40 px-1.5 text-[9px] font-medium uppercase tracking-wide text-violet-600 dark:text-violet-400"
                 >
                   shared
                 </Badge>
